@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="ASan|x64">
+      <Configuration>ASan</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{B4E8A0D3-6C15-4F2A-9D87-E31C5A70F642}</ProjectGuid>
+    <RootNamespace>session</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='ASan'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
+  <Import Project="common.props" />
+  <PropertyGroup>
+    <TargetName>session</TargetName>
+  </PropertyGroup>
+  <!-- LinkIncremental 은 item metadata 가 아니라 PropertyGroup 속성이다.
+       ASan 은 증분 링크와 같이 못 쓴다 (LNK4300). -->
+  <PropertyGroup Condition="'$(Configuration)'=='ASan'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <!-- village 와 달리 mswsock·libmysql 이 없다 — 이 exe 는 DB 코드도
+           S2sConnector(ConnectEx)도 참조하지 않아 common.lib 에서 그 오브젝트가
+           안 끌려온다. 링크 에러가 나면 그때 추가한다. -->
+      <AdditionalDependencies>ws2_32.lib;winmm.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\src\session\main.cpp" />
+    <ClCompile Include="..\src\session\registry.cpp" />
+    <ClCompile Include="..\src\session\session_router.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\session\registry.h" />
+    <ClInclude Include="..\src\session\session_router.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="common.vcxproj">
+      <Project>{D5EADE78-ECBD-49D4-A0CC-47D8C0BB24C8}</Project>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

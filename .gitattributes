@@ -1,0 +1,20 @@
+# 기본은 git 이 판단
+* text=auto
+
+# Windows 도구가 읽는 파일은 CRLF 로 고정
+*.sln           text eol=crlf
+*.vcxproj       text eol=crlf
+*.props         text eol=crlf
+*.vcxproj.*     text eol=crlf
+*.ps1           text eol=crlf
+
+# 소스·문서는 LF
+*.h             text eol=lf
+*.cpp           text eol=lf
+*.md            text eol=lf
+*.sql           text eol=lf
+*.py            text eol=lf
+*.ini           text eol=lf
+
+# 바이너리는 손대지 않는다 — 줄바꿈 변환이 파일을 깨뜨린다
+*.pdf           binary

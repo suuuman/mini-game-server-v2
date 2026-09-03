@@ -1,0 +1,85 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- common.lib 와 village.exe 가 공유하는 빌드 설정. 진실은 여기 한 벌뿐이다.
+       두 벌로 두면 어긋나는데, 그 어긋남이 조용하다 —
+       common 의 최적화 수준이 낮아져도 하네스 8종은 전부 통과 마크를 찍는다.
+       Microsoft.Cpp.props 를 이 파일 가운데에서 부른다.
+       Label="Configuration" 속성은 그 앞에서, ItemDefinitionGroup 은 그 뒤에서
+       정해져야 하기 때문이다. 각 .vcxproj 는 Cpp.props 를 직접 부르지 않고 이 파일을 부른다.
+       대가로 VS 속성 관리자에서 이 값들을 편집하는 UX 가 깨진다 — 빌드 정본이 CLI 라 감수했다. -->
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='ASan'" Label="Configuration">
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <PropertyGroup>
+    <OutDir>$(SolutionDir)build\$(Platform)\$(Configuration)\</OutDir>
+    <!-- 프로젝트 이름을 경로에 넣는다. 안 넣으면 두 프로젝트가 같은 폴더에 .obj/.tlog 를
+         쏟아 MSB8028 이 나고, "잘못된 정리 및 다시 빌드"가 실제로 일어난다.
+         원본은 프로젝트가 하나라 필요 없었다 — 분리가 만든 요구사항이다. -->
+    <IntDir>$(SolutionDir)build\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+
+  <!-- MySQL 경로를 한 곳에 모은다. 버전이 바뀌면 여기만 고친다.
+       아래 include 와 village 쪽 lib / PostBuildEvent 가 전부 이 변수를 쓴다.
+       경로를 세 군데 흩어 두면 하나만 고치고 나머지를 잊는 날이 온다. -->
+  <PropertyGroup>
+    <MySqlDir Condition="'$(MySqlDir)'==''">C:\Program Files\MySQL\MySQL Server 8.4</MySqlDir>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalIncludeDirectories>$(SolutionDir)src;$(MySqlDir)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <Optimization>Disabled</Optimization>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <!-- ASan — Debug 와 같되 Address Sanitizer 를 켠다.
+       ASan 과 같이 못 쓰는 것들을 여기서 꺼야 한다:
+         · /RTC (BasicRuntimeChecks)  — Debug 기본값이라 명시적으로 끈다
+         · /ZI (Edit and Continue)    — /Zi 로 못박는다
+       증분 링크(LinkIncremental)는 링크 단계 속성이라 village.vcxproj 에 있다. -->
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='ASan'">
+    <ClCompile>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <Optimization>Disabled</Optimization>
+      <EnableASAN>true</EnableASAN>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+</Project>

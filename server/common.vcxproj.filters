@@ -1,0 +1,93 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="..\src\net\iocp_server.cpp">
+      <Filter>src\net</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\net\s2s_connector.cpp">
+      <Filter>src\net</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\core\alloc_counter.cpp">
+      <Filter>src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\db\db_worker.cpp">
+      <Filter>src\db</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\ops\crash_dump.cpp">
+      <Filter>src\ops</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="src\core">
+      <UniqueIdentifier>{5b2e9f71-6c48-4d3a-8e15-c90a7b26d4f2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\bench">
+      <UniqueIdentifier>{9c4e2b58-1a37-4f60-b8d9-2e75a03c6df1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\db">
+      <UniqueIdentifier>{7d1f4a63-8e29-4b57-a0c6-5f83e29b1c47}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\net">
+      <UniqueIdentifier>{a1c7b204-3e5f-4a18-9d62-71f0c4e8b933}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\proto">
+      <UniqueIdentifier>{def3cf3f-fd37-4d9e-b01f-aee077bf7c4b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\ops">
+      <UniqueIdentifier>{a1b2c3d4-0016-4a16-9016-0000000000ff}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\core\job_queue.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\core\lock_rank.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\core\log.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\core\mpsc_queue.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\core\alloc_counter.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\core\buffer_pool.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\core\config.h">
+      <Filter>src\core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\bench\bench.h">
+      <Filter>src\bench</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\db\db_conn.h">
+      <Filter>src\db</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\db\db_pool.h">
+      <Filter>src\db</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\db\db_worker.h">
+      <Filter>src\db</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\net\iocp_server.h">
+      <Filter>src\net</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\net\session.h">
+      <Filter>src\net</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\net\s2s_connector.h">
+      <Filter>src\net</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\proto\packet.h">
+      <Filter>src\proto</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\proto\s2s_packet.h">
+      <Filter>src\proto</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\ops\crash_dump.h">
+      <Filter>src\ops</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

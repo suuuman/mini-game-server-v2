@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="..\src\session\main.cpp">
+      <Filter>src\session</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\session\registry.cpp">
+      <Filter>src\session</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\session\session_router.cpp">
+      <Filter>src\session</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="src">
+      <UniqueIdentifier>{c2a91d64-8e07-4f53-b1d8-3a6f90c47e15}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\session">
+      <UniqueIdentifier>{5b7e30f8-914c-4a26-8d09-f7c1284ab6d3}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\session\registry.h">
+      <Filter>src\session</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\session\session_router.h">
+      <Filter>src\session</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
