@@ -46,7 +46,8 @@ bool handle_foo(net::IocpServer& server, app::EntryTable& entry,
 기존 것(`send.ps1`, `trade.ps1`)의 프레임 조립부를 복사해서 쓴다.
 
 ### 5) 문서
-`README.md` 의 프로토콜 표 · 이 파일 아님. `docs/*.pdf` 는 소스 발췌를 담고 있으니 발췌 대상 코드를 바꿨으면 같이 본다.
+`README.md` 의 프로토콜 표 · `docs/ARCHITECTURE.md` §6 의 요청 표 — 이 파일 아님.
+⚠️ **정정 — 도면(`docs\*.pdf`)은 이 저장소에 없다**(추적 0건). 옛 문구가 *"소스 발췌를 담고 있으니 같이 본다"* 고 했으나 볼 대상이 없다. 경위는 `README.md` 「문서」 절 끝에 있다.
 
 ---
 

@@ -184,7 +184,7 @@ db_pool.try_acquire()   →   실패 시 즉시 kBusy(재큐잉 없음)
 |---|---|---|
 | 틱 로직 | `app::TickThread::run()`(`worker_pool.cpp`) — 지금은 `[TICK ]`/`[TICK2]` 통계만 낸다 | 전용 틱 스레드 1개가 30Hz 로 돈다. 세션·DB 를 안 만지므로 상태 갱신을 넣으려면 EntryTable 스냅샷 경유(락 규율 §7 준수) |
 | 인증 | `handle_enter`의 예약 확인 옆 | 토큰 검증이 들어갈 자리. 지금은 세션 서버의 `SessionLogin`이 `player_id`를 그대로 믿고, 마을은 그 결과인 예약만 확인한다 |
-| 존 멤버 목록 | `kJoinZoneAck`이 `member_count`만 준다 | 거래 상대 지목을 위해 멤버 세션 ID 목록이 필요 |
+| ~~존 멤버 목록~~ | ✅ **채워졌다** — `kZoneMembersNtf`(112)가 멤버 `session_id` 목록을 내려준다 | 거래 상대 지목이 이것으로 성립한다(`packet.h` 의 그 주석이 이 메시지가 생긴 이유다). 4개 변동 지점이 전부 통지를 내는지는 `members.ps1` 11항목이 검증한다. ⚠️ 남은 한계는 「존에 있는 채로 로그인하면 `player_id` 가 낡는다」뿐이다(README 「알려진 한계」) |
 | 인벤토리 푸시 | 거래 성공 후 클라가 다시 조회해야 함 | `kTradeAck` 뒤 자동 `kInventoryAck` 푸시 가능 |
 | 존 인덱스 분리 | `EntryTable::zone_index_`가 L1 과 한 뮤텍스 | ✅ **6단계에서 재평가 완료(A11 폐합)** — 명부 스냅샷형 임계구역을 `std::mutex` vs `std::shared_mutex`로 실측(N=100/1,000/4,096), 최악 N 에서도 임계구역이 수백 μs 미만이고 `shared_mutex` 이득이 없어 **`std::mutex` 유지·인덱스 L1 안 유지로 확정**(근거·수치는 ADR-026) |
 | 단위 테스트 | 없음 | 순수 함수(`frame_size`, `world::Trade` 순수 메서드, 락 순서 정렬)는 테스트 가능 |

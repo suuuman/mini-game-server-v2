@@ -233,7 +233,10 @@ ASan 은 `free` 한 메모리를 격리에 붙들어 둬서 **누수가 없어�
 > ⚠️ **`zone_block.ps1` 은 `player 1` 하나만 쓴다** — 워커 하나만 돌아서 풀 크기 측정에는 안 맞는다.
 > 그 목적에는 `dbload.ps1` 을 쓴다.
 >
-> ⚠️ `tick.ps1` 의 고장 스위치는 **`zone_manager.cpp` 의 `constexpr` 를 패치하고 재빌드**해야 한다.
+> ⚠️ `tick.ps1` 의 고장 스위치는 **`src/app/worker_pool.cpp` 의 `constexpr`**(`kBadTickWorkMs` ·
+> `kBadTickSpikeEvery` · `kBadTickSpikeMs`)**를 패치하고 재빌드**해야 한다.
+> ⛔ **정정** — 옛 `zone_manager.cpp` 는 5단계에서 삭제됐다. 이관 사실은 **§0 이 이미 적고 있었는데
+> 이 줄만 낡은 채 남아 있었다** — 같은 문서 안의 모순이라 어느 쪽도 서로를 안 고쳤다.
 > §0의 「부하 주입 스위치 꺼짐」과 직접 충돌하므로 **돌린 뒤 반드시 원복**한다.
 
 ### 변경 유형별 최소 세트
