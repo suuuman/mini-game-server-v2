@@ -241,20 +241,32 @@ ASan 은 `free` 한 메모리를 격리에 붙들어 둬서 **누수가 없어�
 
 ### 변경 유형별 최소 세트
 
-| 변경한 것 | 반드시 돌릴 것 |
-|---|---|
-| 프로토콜 · 프레이밍 | 1(send) · 2(zone) |
-| **락(L1 명부·L2 세션)·`EntryTable`(존 인덱스·`move_zone`)·직렬 큐(serial_queue)** — 존/존 스레드/placement 를 대체 | **2(zone) · 3(members) · 7(zone_race — Debug/ASan 필수, 락 계층 검사기) · 10(session) · 11(gate) · 14(chat)** + 명부 갱신 API(`enter`/`leave`/`move_zone`)나 직렬 큐 push/drain 경로를 건드렸으면 **5(zone_block)·6(trade)·8(churn, Debug·Release)** 도 포함(옛 「존·존 스레드·placement」 행을 대체 — `placement.h`·`zone_manager.{h,cpp}` 는 삭제됐다) |
-| **채팅·브로드캐스트**(`handle_chat`·`build_frame`·`snapshot_zone`/`snapshot_all`·`find_acquire_by_player_id`) — 신설 | **2(zone) · 14(chat)** + 락/`EntryTable` 행 전체(위) — 채팅은 명부 스냅샷·통짜 프레임 조립을 그대로 타므로 그 행의 필수 세트를 그대로 물려받는다 |
-| DB · 트랜잭션 | 4(inventory) · 5(zone_block, **워커-풀 격리 재정의판**) · **6(trade)** — ⛔ **SP 경로를 건드렸으면 `-ExpectDbError` 로 「미배포」·「권한 결핍」도 함께 본다** |
-| 세션 수명 (`acquire`/`release`) | 8(churn, **Debug·Release 만**) + **ASan 은 3(members)·1(send)·2(zone) 계열로** — ⛔ `churn` 은 ASan 에서 하네스가 스스로 거부한다(아래 절) |
-| 틱 · 시뮬레이션 | 2(zone) · 4(inventory) + `[TICK ]`/`[TICK2]` 비교(⚠️ **정정** — 소유가 존 스레드에서 전용 틱 스레드(`app::worker_pool.cpp`)로 바뀌었다. 지표 의미·비교 방법은 그대로) |
-| **S2S 커넥터 · `s2s_link` · `s2s_packet`** | **9(s2s) 를 Debug·Release·ASan 세 구성으로** · `main.cpp`/`config` 배선까지 건드렸으면 전 세트 |
-| **세션 서버(`src/session/`) · 세션 수용 경로** | **10(session) 을 Release·ASan 으로** + 9(s2s) 3구성. `proto` 공유 헤더를 건드렸으면 전 세트 |
-| **예약 강제 게이트 · 신원 확정(`handle_enter`·`EntryTable`) · `on_frame` 진입부** | **11(gate)** + 10(session) + 6(trade). ⛔ **게이트는 `gate.ps1` 말고는 아무도 안 본다** — 뮤턴트 실측: 게이트를 무력화해도 죽는 것은 `gate.ps1` **N1~N4a 4건뿐**이고 `session.ps1` 73 항목은 **전부 통과했다**(그 73 개 중 미인증 상태로 게임 요청을 보내는 것이 0개다 — 그 시점 총량. 뒤에 78 로 늘었지만 이 결론을 재실측하지는 않았다) |
-| **드레인·서비스 상태(`EntryTable::draining_`·`ServerEntry.draining`·`SetMode`·`DrainComplete`)** | **12(drain)** + 10(session) + 9(s2s) |
-| **idle·유휴 정리(`sweep_loop`·`close_session`·`idle_timeout_sec`)** | **13(idle)** + 8(churn, **Debug·Release 만**) |
-| **동기 Kick(`find_connection`·`PendingKick`·`find_session`·`close_by_id`·Kick 코덱·`with_snapshot`)** | **10(session — K 계열이 주 검증)** + 9(s2s — 코덱·NotFound·malformed) + 6(trade — 거래 중 Kick 정리) + 11(gate — 마을 중복 거절 잔존 분기). ⛔ **세션 수명(close_by_id)을 건드리므로 session·s2s ASan 회차 의무** |
+**● 필수 · ◐ 조건부(그 행의 조건 각주를 본다) · ✗ 그 구성에서 하네스가 스스로 거부**
+구성 표기 — `D` Debug 필수 · `R` Release · `A` ASan 의무 · `3` Debug·Release·ASan 세 구성
+
+| 변경한 것 | 1 send | 2 zone | 3 memb | 4 inv | 5 zblk | 6 trade | 7 race | 8 churn | 9 s2s | 10 sess | 11 gate | 12 drain | 13 idle | 14 chat |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| 프로토콜 · 프레이밍 | ● | ● | | | | | | | | | | | | |
+| 락 · `EntryTable` · 직렬 큐 <sup>a</sup> | | ● | ● | | ◐ | ◐ | ●<sup>D</sup> | ◐<sup>DR</sup> | | ● | ● | | | ● |
+| 채팅 · 브로드캐스트 <sup>b</sup> | | ● | | | | | | | | | | | | ● |
+| DB · 트랜잭션 <sup>c</sup> | | | | ● | ● | ● | | | | | | | | |
+| 세션 수명(`acquire`/`release`) <sup>d</sup> | ●<sup>A</sup> | ●<sup>A</sup> | ●<sup>A</sup> | | | | | ●<sup>DR</sup>✗ | | | | | | |
+| 틱 · 시뮬레이션 <sup>e</sup> | | ● | | ● | | | | | | | | | | |
+| S2S 커넥터 · `s2s_link` · `s2s_packet` <sup>f</sup> | | | | | | | | | ●<sup>3</sup> | | | | | |
+| 세션 서버(`src/session/`) · 수용 경로 <sup>f</sup> | | | | | | | | | ●<sup>3</sup> | ●<sup>RA</sup> | | | | |
+| 예약 게이트 · 신원 확정 <sup>g</sup> | | | | | | ● | | | | ● | ● | | | |
+| 드레인 · 서비스 상태 | | | | | | | | | ● | ● | | ● | | |
+| idle · 유휴 정리 | | | | | | | | ●<sup>DR</sup> | | | | | ● | |
+| 동기 Kick <sup>h</sup> | | | | | | ● | | | ●<sup>A</sup> | ●<sup>A</sup> | ● | | | |
+
+<sup>a</sup> **락(L1 명부·L2 세션)·`EntryTable`(존 인덱스·`move_zone`)·직렬 큐(`serial_queue`)** — 옛 「존·존 스레드·placement」 행을 대체한다(`placement.h`·`zone_manager.{h,cpp}` 는 삭제됐다). **◐ 조건**: 명부 갱신 API(`enter`/`leave`/`move_zone`)나 직렬 큐 push/drain 경로를 건드렸으면 5·6·8 도 포함한다. 7 은 락 계층 검사기라 **Debug/ASan 이어야 뜻이 있다**.
+<sup>b</sup> `handle_chat`·`build_frame`·`snapshot_zone`/`snapshot_all`·`find_acquire_by_player_id`(신설). **⛔ 위 <sup>a</sup> 행의 필수 세트를 그대로 물려받는다** — 채팅이 명부 스냅샷·통짜 프레임 조립을 그대로 타기 때문이다.
+<sup>c</sup> 5 는 **워커-풀 격리 재정의판**이다. ⛔ **SP 경로를 건드렸으면 `-ExpectDbError` 로 「미배포」·「권한 결핍」도 함께 본다.**
+<sup>d</sup> ⛔ **`churn` 은 ASan 에서 하네스가 스스로 거부한다**(아래 절) — 그래서 ASan 축은 1·2·3 계열이 진다. `churn` 자체는 Debug·Release 만.
+<sup>e</sup> `[TICK ]`/`[TICK2]` 를 기능 추가 전후로 비교한다. ⚠️ **정정** — 소유가 존 스레드에서 전용 틱 스레드(`app::worker_pool.cpp`)로 바뀌었다. 지표 의미·비교 방법은 그대로다.
+<sup>f</sup> `main.cpp`/`config` 배선(S2S)이나 `proto` 공유 헤더(세션 서버)까지 건드렸으면 **전 세트**를 돌린다.
+<sup>g</sup> `handle_enter`·`EntryTable`·`on_frame` 진입부. ⛔ **게이트는 `gate.ps1` 말고는 아무도 안 본다** — 뮤턴트 실측: 게이트를 무력화해도 죽는 것은 `gate.ps1` **N1~N4a 4건뿐**이고 `session.ps1` 73 항목은 **전부 통과했다**(그 73 개 중 미인증 상태로 게임 요청을 보내는 것이 0개다 — 그 시점 총량. 뒤에 78 로 늘었지만 이 결론을 재실측하지는 않았다).
+<sup>h</sup> `find_connection`·`PendingKick`·`find_session`·`close_by_id`·Kick 코덱·`with_snapshot`. 10 은 **K 계열이 주 검증**, 9 는 코덱·NotFound·malformed, 6 은 거래 중 Kick 정리, 11 은 마을 중복 거절 잔존 분기다. ⛔ **세션 수명(`close_by_id`)을 건드리므로 session·s2s ASan 회차 의무.**
 
 > ⚠️ 이 표의 번호는 §2 표 기준이다. **3번(members)을 삽입했을 때 이 표의 번호가 갱신되지
 > 않은 채 남아 있었다**(뒤에 발견·정정) — 그래서 이름을 병기한다. 행을 넣고 빼면 이 표도 같이 본다.
