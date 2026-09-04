@@ -95,7 +95,7 @@ bool handle_foo(net::IocpServer& server, db::DbPool& db_pool, net::Session& sess
 
 ## D. 새 소스 파일 추가하기
 
-1. `src/<layer>/` 에 만든다. **의존 방향**: `world → proto → net → core`, `db → core`, `ops → core`, `app` 만 전부를 안다. 역방향 include 금지.
+1. `src/<layer>/` 에 만든다. **의존 방향**: `world → proto → net → core`, `db → core`, `ops → core`, **`session → proto → net → core`(db 불링크 — ADR-020 결정 7)**, `app` 만 전부를 안다. 역방향 include 금지. ⭐ 정본은 `docs/CODING_RULES.md` §0 이다.
 2. 그 파일이 속한 프로젝트(`src/{core,net,db,ops,bench,proto}` → `server\common.vcxproj` · `src/{app,world}`와 `src/main.cpp` → `server\village.vcxproj`)의 `<ItemGroup>` 에 `<ClCompile Include="..\src\...\x.cpp" />` / `<ClInclude Include="..\src\...\x.h" />` 추가 (와일드카드 없음).
 3. 같은 프로젝트의 `.filters` 에 같은 항목 + `<Filter>` 지정.
 4. `scripts\build.ps1` 로 세 구성 빌드 — **경고 0** 이 기준선이다 (`/W4`).
@@ -113,23 +113,45 @@ bool handle_foo(net::IocpServer& server, db::DbPool& db_pool, net::Session& sess
 
 ## F. 작업 전후 회귀 절차 (고정)
 
+⛔ **절차의 정본은 `docs/TESTING.md` §2 다.** 아래는 그 요약이고, 인자·기대값이 어긋나면 그쪽이 맞다.
+⛔ **묶음이 두 갈래이고 둘 다 포트 9000 을 쓴다 — 순서가 강제된다.** 한 창에서 이어 돌리면 뒤엣것이 죽는다.
+
 ```powershell
 # 0. 부하 주입 스위치 전부 꺼짐 확인
 #    frame_router.cpp : kLogicDelayMs · kBadSyncDbMs · kBadTradeNoTx
 #    worker_pool.cpp  : kBadTickWorkMs · kBadTickSpikeEvery · kBadTickSpikeMs
 #    (idle_timeout_sec 는 이 목록이 아니다 — 커밋 의도값이 90 이다(ADR-023).
 #     자체 스폰 하네스는 스크래치에서 0 으로 오버라이드한다 — TESTING.md §0)
+#    ⭐ 이 6개 목록의 정본도 TESTING.md §0 이다.
 
-.\scripts\build.ps1                                          # 경고 0
+.\scripts\build.ps1                                          # Debug·Release·ASan · 경고 0
 
+# ① 서버를 미리 띄우고 다른 창에서 두 종 — 이 갈래만 사전 기동이다
+.\build\x64\Release\village.exe --seconds 60                 # ⚠️ 반드시 프로젝트 루트에서
 .\scripts\send.ps1       -Repeat 3000 -Size 8 -Framed -Seq   # 프레임 경계·순서(직렬 큐 순서 회귀도 겸한다)
+.\scripts\churn.ps1      -Count 1000 -Framed                 # 접속 반복·누수 (ASan 에서는 하네스가 스스로 거부한다)
+
+# ② 서버를 내린 뒤 — 아래 열 종은 각자 서버를 스폰한다
 .\scripts\zone.ps1       -Clients 8 -Zones 4 -Chats 100      # 존 경계 브로드캐스트
+.\scripts\members.ps1                                        # 존 멤버 목록 통지 — 4개 변동 지점
 .\scripts\inventory.ps1  -Mixed                              # DB 왕복
 .\scripts\zone_block.ps1 -Floods 20                          # 워커-풀 격리(DB 폭탄이 풀을 잠가도 에코는 안 밀림)
-.\scripts\trade.ps1      -All                                # 거래 25항목·총량 보존
-.\scripts\zone_race.ps1  -Pairs 3000                         # 락 계층 역순 검사기(Debug/ASan) 무발화
-.\scripts\churn.ps1      -Count 1000 -Framed                 # 접속 반복·누수
+.\scripts\trade.ps1      -All -DbUser sp_owner -DbPass '<비번>'   # 거래 25항목·총량 보존
+.\scripts\zone_race.ps1  -Pairs 3000                         # 락 계층 역순 검사기 무발화 (기본 -Config Debug)
+.\scripts\gate.ps1                                           # 예약 강제 게이트 11항목
+.\scripts\drain.ps1                                          # 드레인 19판정
+.\scripts\idle.ps1                                           # 유휴 절단 9판정
+.\scripts\chat.ps1                                           # 채팅 3종 48판정
+
+# ③ 단독 실행 — 다른 종과 창을 공유하지 않는다
+.\scripts\s2s.ps1                                            # S2S 커넥터 29항목(28 통과 + SKIP 1)
+.\scripts\session.ps1                                        # 세션 서버 통합 95항목
 ```
+
+⛔ **`trade.ps1` 은 계정 인자가 필수다** — 서버 계정 `minigame` 은 `EXECUTE` 만 갖는다(ADR-014).
+기본값으로 돌리면 테이블 대조에서 **`1142` 로 죽는다**(의도된 동작). `seed_load.ps1` 도 같다.
+⚠️ **`zone_race.ps1` 에 `-Config Release` 를 명시하면 검사기가 no-op 이라 아무것도 안 잡는다.**
+⚠️ **`s2s.ps1` 의 ASan 회차는 `run-asan.ps1` 이 아니라 `.\scripts\s2s.ps1 -Config ASan` 이다.**
 
 **판정 지표(종료 로그)**
 

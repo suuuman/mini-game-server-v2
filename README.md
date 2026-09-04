@@ -92,7 +92,8 @@ src/
   bench/  bench                            내장 측정 하네스
 ```
 
-**의존 방향은 한쪽입니다** — `world → proto → net → core` · `db → core` · `ops → core`.
+**의존 방향은 한쪽입니다** — `world → proto → net → core` · `db → core` · `ops → core` ·
+`session → proto → net → core`(세션 서버는 **DB 계층을 링크하지 않습니다** — 레지스트리·예약·접속 테이블이 전부 프로세스 메모리라서입니다).
 역방향 include 는 금지이고, `#include` 그래프를 훑어 위반을 잡는 검사기를 따로 두고 돌렸습니다.
 `app/` 만 전부를 압니다.
 
