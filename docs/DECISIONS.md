@@ -1355,6 +1355,49 @@ B. **kSerialDrainBatch** — `drain_batch.ps1` K ∈ {1,4,16,64} · 2회 중앙�
 
 ---
 
+## ADR-029 — C++ 클라이언트를 별도 exe 로 세우고, `proto` 헤더만 include 한 블로킹 소켓 + `select` 타임아웃으로 첫 조각(로그인→Enter→Echo/Ping · `send` 이식 · 주기 ping)을 만든다
+
+**상태**: **확정 · 구현 결과 — 실측** (2026-09-05 · T015 hard-dev 자율 진행 모드 — lead 자체 승인 A1~A12 · 제안 시점의 문안은 그대로 두고 아래 「구현 결과」 절을 덧붙였다)
+
+**맥락**: 분리 로드맵(DESIGN §13)의 마지막 7단계 「C++ 클라이언트 — 하네스 이식」이 미착수였다. 검증 수단이 전부 PowerShell 5.1 단일 스레드 하네스라 ① 판정이 콘솔 문자열뿐이어서(`send.ps1` 에 `exit` 0건) 자동화가 못 읽고, ② A15(앱 레벨 ping — `idle_timeout_sec=90` 의 전제 「클라 ping 30s×3」, ADR-023 결정 7)를 실제로 보내는 클라가 한 번도 없었고, ③ ADR-028 이 「PS 클라라 워커 9~11개 이상을 못 먹인다」고 적은 측정 한도가 이월 실측(L1 경합·`[io] worker_threads`)의 선행 조건으로 남아 있었다. 후보 넷(7단계 클라 / 이월 실측 / 직렬 큐 상한 / TCP_NODELAY)을 비교해 나머지 셋의 검증 수단이 모두 이 클라에 걸려 있다는 이유로 이것을 골랐다. 첫 조각은 「세션 로그인 → 배정 → Enter → Echo/Ping 왕복 + `send` 하네스 1종 이식」으로 자른다(오퍼레이터 지시).
+
+**결정**:
+
+| # | 결정 | 근거 |
+|---|---|---|
+| 1 | **별도 exe `client.exe`** — `server\client.vcxproj(.filters)` 신설, 소스 `src/client/`, `.sln` 에 Project 블록 + 구성 6줄. `session.vcxproj` 를 원형으로 `common.props` Import · `ws2_32.lib` 만 링크 | 클라는 서버와 **다른 프로세스로 동시에** 돌아야 하고 db/app 계층을 몰라야 한다 — `village.exe --client` 모드(bench.h 가 별도 exe 를 피한 선례)는 그 둘을 어긴다. `.sln` 6줄 규칙은 `CODING_RULES.md` §0 원문 |
+| 2 | **`common.lib` 를 링크하지 않는다** — `proto/packet.h` 만 include. 의존 방향 `client → proto` 신설 | `packet.h` 는 `<cstdint>`·`<cstddef>` 만 include 하는 헤더 전용(`packet.h:8-9`)이라 코덱 사본 없이 재사용된다. `core/log.h` 도 쓰지 않는다 — 하네스가 stdout 줄을 파싱하므로 `printf`+`fflush` 가 순서·즉시성이 자명하다 |
+| 3 | **블로킹 Winsock + `select()` 타임아웃. `SO_RCVTIMEO` 는 쓰지 않는다** | MS Learn SOL_SOCKET 옵션 표: *"If a blocking receive call times out, the connection is in an indeterminate state and should be closed."* — 타임아웃 뒤 같은 소켓을 계속 쓰는 hold/ping 루프와 양립하지 않는다. `select` 는 *"zero if the time limit expired"*. RST 종료는 `SO_LINGER{1,0}`+`closesocket`(*"the connection is reset … will not go to the TIME_WAIT state"*), Nagle 은 `TCP_NODELAY`(*"disabled by default"*) — 전부 MS Learn 원문(2026-09-05 열람) |
+| 4 | **종료 코드 규약** 0=PASS · 1=판정 FAIL · 2=인자 오류 · 3=접속/초기화 실패, 마지막 줄 `RESULT: PASS\|FAIL <사유>`. 출력 줄은 `send.ps1` 문구를 재현 | `send.ps1` 은 `exit` 가 0건이라 `order : X` 가 콘솔 문자열로만 남는다(조사 C) — CI 가 못 읽는 손해(§18-7 통과) |
+| 5 | **`send --hold` 에 `--ping-ms` 주기 ping** 을 넣어 A15 잔여를 닫는다. 검증은 `idle_timeout_sec=2` 마을에서 hold 7s·ping 1s → 생존(`idle_kicked=0`) / ping 0 → 절단(`idle_kicked=1`) | A15 정본은 「클라 ping 30s×3」(DESIGN §14 A15 · §18-8 #2 · ADR-023 결정 7) — 1회성 왕복이 아니라 **주기 ping** 이다. 리스크 분석은 완료 기준 미확정을 이유로 보류를 권했고, lead 가 정본 인용으로 기준을 확정해 채택했다 |
+| 6 | **`selftest` 서브커맨드** — 프레임 코덱 순수 함수(조립·분할·str16·순번 검사) 단위 테스트 ≥ 8 항목 | 클라 판정 로직 자체의 결함(순번 검사가 항상 OK)은 정상 서버 앞에서는 영구히 초록이다(리스크 §4) — 이것이 뮤턴트 MUT1 을 죽이는 유일한 판정자 |
+| 7 | **검증 하네스 `scripts/client.ps1`(B 갈래 자체 스폰 · 단독 실행)** — 마을은 `New-HarnessHome`·`Start-Village`, 세션 서버는 `config/session.ini` **미패치 사본** + `Start-ServerProcess`. `session.ps1` 은 건드리지 않는다 | `New-HarnessHome` 이 `idle_timeout_sec=0`·`[s2s] host/port` 를 이중 단언으로 패치하고(`harness_common.ps1:437-474`) 9100 은 `session.ini` 기본 `[s2s_accept] port` 다 — 복제(드리프트)·`session.ps1` 승격(95항목 재검증)·자체 정의(idle 0 누락 위험) 셋을 전부 피한다. `TESTING.md` §2 에 15행 + 「`session.ps1` 과 같은 단독 실행」 각주 |
+| 8 | **`send.ps1` 유지** | 14종 이식 완료(DESIGN §10)가 삭제 조건. 이번은 1종의 동치 실증(같은 서버 앞에서 `send.ps1` 과 `client send` 가 같은 `order : OK`)까지 |
+| 9 | 구성 축 — 서버 3구성 × 클라 Release · 클라 ASan 1회는 **클라 자체 메모리 검증** | 별도 프로세스라 클라 ASan 이 서버 결함을 더 잡아 주지 않는다 |
+
+**근거 — 버린 대안**: IOCP 비동기 클라(`S2sConnector` 패턴 — 8B S2S 헤더라 코드 재사용 불가, 첫 조각 범위 초과 → 재접속 조각으로 이월) · `common.lib` 링크 + `core::logf`(비동기 플러시 여부 미확인 · CLI 도구에 파일 로그·스레드 불필요) · `client.exe` 가 서버를 스스로 스폰(`Start-ServerProcess` 가 회피하는 stdin 리다이렉트 환경 버그를 C++ 로 재발견) · 동시 송수신 스레드(§18-7 — 지금 손해 없음; `send.ps1:11-12` 의 60,000B 예산 규칙을 그대로 승계) · `--ping-ms` 제외(A15 가 열린 채 남음).
+
+**결과 / 트레이드오프**:
+- ✅ 서버 소스 무변경(0줄) — 불변식 10개(ARCHITECTURE §7)에 구조적 사이드이펙트 없음. 로드맵 7단계 착수 · A15 폐합(조건부) · 종료 코드 판정 · 저장소 최초의 단위 테스트(클라 순수 함수 한정)
+- ⚠️ 하네스 15종으로 늘고 `client.ps1` 은 `session.ps1` 과 같은 「단독 실행」 제약(포트 9200/9100/9000) — TESTING §2 등록 누락 시 실행창 충돌
+- ⚠️ `build.ps1` 경고 카운트가 .sln 전체 문자열 매칭이라 클라 경고가 서버 기준선과 섞인다 — 클라 경고는 클라 소스에서 없앤다. **`common.props` 는 고치지 않는다**
+- ⚠️ 13종은 아직 PowerShell — 「클라이언트가 PowerShell」 약점(DESIGN §12)은 1/14 만 해소
+
+**미검증 전제** (T015-plan.md §7 — 구현 중 실측): U1 `select`+`recv` 조합의 타임아웃 후 재사용(깨지면 결정 3·5 재설계 → 재승인) · U2 `Set-IniKeyInSection` 빈 값 · U3 idle 2s 킥 시간 · U4 `session.ini` 미패치 사본 · U5 `.sln` 등록만으로 `build.ps1` 편입 · U6 `/W4` 경고 0 · U7 ASan DLL PATH 상속.
+→ **전부 해소(실측)**: U1 Step 2 `--hold 4 --ping-ms 1000` → `pongs=4`(select 타임아웃 뒤 같은 소켓 재사용 OK) · U2 `harness_common.ps1` 정규식 정독 · U3 ping 없는 hold 가 2817~2918ms 에 절단(`idle_timeout_sec=2`) · U4 미패치 사본으로 `session server up` · U5 Step 1 첫 빌드에서 `client.exe` 3개 · U6 3구성 `warnings=0` · U7 `client.ps1 -Config ASan` 35/35(9단계).
+
+**구현 결과 — 실측 (8·9단계 · 2026-09-05 밤)**:
+- **상한 실적**: 프로덕션 신규 **11/11**(`server/client.vcxproj(.filters)` · `src/client/` 9파일 — vcxproj·filters 등록 9=9) · 수정 **1/1**(`mini-game-server.sln` +8) · **서버 소스 0줄**(`git diff origin/master` — `src/{app,core,net,proto,world,db,ops,bench,session}` · `main.cpp` · `common.props` · 기존 vcxproj 3종 · `harness_common.ps1`·`send.ps1`·`run-asan.ps1` 전부 0) · 하네스 신규 1(`scripts/client.ps1` 363줄 · **35판정** — 견적 +14 → 5단계 PM·QA HIGH 로 21 → 7단계 test R1 로 29 → R2 로 35) · 하네스 수정 0 · `config/server.ini` 는 주석만(「기본이 꺼짐인 이유」가 ADR-023 이전 문구라 정정).
+- **빌드**: 3구성 `OK … warnings=0 errors=0` 전 회차(최종 23:23) · `build\x64\{Debug,Release,ASan}\client.exe`.
+- **회귀**: `client.ps1`(Release) **35/35 · exit 0** — 구현자 2회 · lead 23:01 · 뮤턴트 원복 뒤 FINAL 2회(23:14 · 23:23) · **ASan 35/35 · exit 0**(23:24 · 29s · AddressSanitizer 보고 0 · `dumps` 0) · `zone.ps1 -Clients 8 -Zones 4 -Chats 100` **8/8 · 각 200/200**(자체 스폰 대표 — `.sln` 변경 뒤 재빌드된 서버 exe 의 기동·회귀 무이상) · S1b `send.ps1` 동치 `order : OK — 3000 개가 0..2999 순서대로`. 나머지 PowerShell 13종은 서버 소스 무변경을 이유로 돌리지 않았다(플랜 §11-2 — 서버 바이너리가 같은 소스에서 재빌드됐다는 전제).
+- **A15 실측**(결정 5 — `idle_timeout_sec=2` 마을 B · hold 7s): ping 1s → `hold  : done pongs=7 closed=false` · `idle_kicked=0` / ping 없음 → `closed by server after 2918 ms`(Release) · 2817ms(ASan) · `[NET  ] idle_kicked=1`. ⚠️ 조건: 30s 주기는 옵션 값이고 실서비스 클라 제품은 범위 밖.
+- **뮤턴트**: **설계 20 · 주입 19 · 미주입 1 · 무효 회차 0**(전 회차 마커 카운트 일치 · exe mtime 갱신 · errors=0 · 백업과 바이트 일치 복원). 킬 뮤턴트 18종 중 기대 정확 일치 **16/18** — MUT1 S0 · MUT3 S3c·S3d·S13·S17 · MUT4 S4b · MUT5 S3b·S4b·S12·S16 · MUT6 S0 · MUT7 S0 · MUT8 S12 · MUT9 S17(S13 생존 — 7단계 test R2 REFUTED 대로) · MUT10 S10 · MUT11 S20 · MUT12 S21 · MUT13 S14 · MUT15 S18 · MUT16 S3a·S3f · MUT17 S11 · MUT19(connect 실패 판정 무력화 — 11단계 test 렌즈 제안) S7·S15·S19. MUT20(`close_rst`→`close_graceful` 바꿔치기 — 같은 제안)은 **예상대로 35/35 생존** → S9 는 소켓 레벨을 못 본다는 하네스 한계로 TESTING 「못 덮는 것」 등재. 어긋난 둘: **MUT2**(`parse_frames` 마지막 프레임 누락) 기대 S0·S1 + **S4a 추가 킬**(S4a 는 `--repeat 1 --framed` 라 hold 진입 전 첫 수신에서 유일한 프레임이 빠져 `frames 0/1` → send 판정 자체가 FAIL — lead 의 첫 사유 「pong 계수」는 11단계 test 렌즈가 코드 추적으로 정정) · **MUT18**(recv `kClosed` 분기 무력화) 기대 S3e·S8 중 **S8 생존** — 그 회차 S8 이 `peer closed during send — WSAGetLastError=10053` 로 **송신 단계 절단(C5 경로)** 을 타 PASS(20회 실측에서 처음 관측된 갈래 — TESTING §2 「못 덮는 것」에 기록). 미주입 MUT14(암묵 `login result≠0` 무시)는 `NoServer` 를 만들 서버 상태가 하네스에 없어 재현 불가. 죽은 판정 **23/35** · 생존 12 는 전부 의도된 생존(S1b · S2×4 정상 경로 · S6 usage 디스패치 · S8 두 절단 경로 · S9 경로 커버리지 · S5×3·S4c 서버 로그) — 판정 근거는 HANDOFF §3-o. 11단계 test MED(S5-enter 가 `[ENTER]` 개수만 대조) 반영분은 하네스 뮤턴트(기대 player 집합을 7009 로 어긋냄)로 **S5-enter 만 FAIL(개수 2 그대로)** 하는 것을 실측해 단언을 증명했다.
+- ⛔ **8단계가 잡은 하네스 결함(수정)**: MUT1 회차가 `34/35 FAIL` 인데 프로세스 exit 0 — PowerShell 5.1 은 `Where-Object` 결과가 정확히 1개면 `[pscustomobject]` 하나를 돌려주고 그 `.Count` 는 `$null` 이라 **실패가 정확히 1건일 때만** `exit $null`=0 이 됐다(콘솔 요약은 정확). `client.ps1` 의 두 `.Count` 를 `@(…).Count` 로 고쳤고 이후 1건 실패 회차 12종이 전부 exit 1(2·3·4건 실패 회차는 exit 2·3·4). `inventory.ps1:248,266,267` 의 같은 형태는 정수 스칼라라 결함이 아니다(기록만).
+- **리뷰**: 5단계 `dual-prompt-review` 3-페르소나 R1~R3(HIGH 3 · MED 8 · LOW 11 전건 발견자 폐합) · 7단계 `dual-code-review` Lane A + 3렌즈(correctness R3 · boundary R2 · test R3 — HIGH C5·T1~T4·T10·T11 전건 발견자 폐합 · 기각 3: C3 `WSAESHUTDOWN` 분류 · B1 `WORKFLOW_STATE` 상한 밖 · L3 S5-net 정규식) · **Codex 레인은 전 단계 `CODEX_SKIP:not-authenticated`** — 3-페르소나/3·4렌즈 단독. 11단계 Lane A + 4렌즈(docs 포함): boundary PASS · test PASS(MED 1 — S5-enter 가 `[ENTER]` 개수만 대조 → player 집합 대조로 강화, 하네스 뮤턴트로 증명 · LOW 5 처리: MUT19·MUT20 추가 주입 · `bytes_equal` n==0 · S9 RST 한계 등재) · docs PASS(LOW 1 반영) · correctness MED 1(`recv_exact(timeout_ms=0)` 이 recv 를 한 번도 안 부르고 kTimeout — `recv_some` 의 「0 = 1회 poll」과 불일치 → 마감 뒤 정확히 1회 poll 로 수정 · 재빌드 3구성 경고 0 · Release/ASan 35/35 재실측 · 발견자 CONFIRMED) ⇒ **HIGH 0 · 최종 PASS**. 상세는 HANDOFF §3-o 「리뷰 요약」.
+- **발견한 낡음(기록만 · 무수정)**: `server/session.vcxproj(.filters)` BOM 부재(`client.vcxproj` 는 BOM 있음 — 문서 규정) · `scripts/harness_common.ps1:1,559` 「8종」·`:448` 「9종」 표기 · `.claude/ai-archive` 의 v1 커밋 해시(`913f14b` 등) 언급.
+
+---
+
 ## 템플릿
 
 ```markdown

@@ -1,0 +1,80 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="ASan|x64">
+      <Configuration>ASan</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{6A53A478-6F49-4B08-BE8D-BFD0540BD322}</ProjectGuid>
+    <RootNamespace>client</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='ASan'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
+  <Import Project="common.props" />
+  <PropertyGroup>
+    <TargetName>client</TargetName>
+  </PropertyGroup>
+  <!-- LinkIncremental 은 item metadata 가 아니라 PropertyGroup 속성이다.
+       ASan 은 증분 링크와 같이 못 쓴다 (LNK4300) — session.vcxproj:39-41 과 동형. -->
+  <PropertyGroup Condition="'$(Configuration)'=='ASan'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <!-- common.lib 를 ProjectReference 로 물지 않는 이유 — proto/packet.h 는
+           <cstdint>·<cstddef> 만 include 하는 헤더 전용이다(packet.h:8-9).
+           헤더 include 만으로 encode_header/decode_header/MsgId 를 그대로 쓸 수
+           있어 코덱 사본이 필요 없고, 그래서 링크도 필요 없다(ADR-029 결정 2).
+           이 exe 는 client → proto 하나만 의존한다 — common.lib 에 있는
+           net/db/app/core 오브젝트를 하나도 끌어오지 않는다. -->
+      <!-- ws2_32 만 링크하는 이유 — 이 클라는 소켓 API(winsock2)만 쓴다.
+           session.exe 가 링크하는 winmm·dbghelp 는 각각 core::log.h 의 시간
+           원본과 ops::crash_dump 의 덤프 생성이 쓰는데, 이 클라는 core/ 를
+           include 하지 않으므로(계층 금지 — ADR-029 결정 2) 그 둘을 안 쓴다.
+           링크 에러가 나면 그때 추가한다(session.vcxproj:45-47 관례 그대로). -->
+      <AdditionalDependencies>ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\src\client\main.cpp" />
+    <ClCompile Include="..\src\client\tcp_client.cpp" />
+    <ClCompile Include="..\src\client\cmd_send.cpp" />
+    <ClCompile Include="..\src\client\cmd_flow.cpp" />
+    <ClCompile Include="..\src\client\selftest.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\client\commands.h" />
+    <ClInclude Include="..\src\client\args.h" />
+    <ClInclude Include="..\src\client\frame_codec.h" />
+    <ClInclude Include="..\src\client\tcp_client.h" />
+  </ItemGroup>
+  <!-- ProjectReference 없음 — common.vcxproj 를 참조하지 않는다(위 주석 참조). -->
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
