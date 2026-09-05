@@ -1,7 +1,7 @@
 ﻿# mini-game-server-v2
 
 Windows · C++20 · IOCP 기반 게임 서버를 **세션 서버 + 마을 서버**로 나눈 프로젝트.
-`mini-game-server-portfolio` 에서 파생했다.
+단일 프로세스 서버였던 이전 프로젝트에서 파생했다.
 
 산출물은 셋이다 — `common.lib`(공용 계층) · `village.exe`(마을 서버) · `session.exe`(세션 서버).
 분리 로드맵 0~6단계가 끝나 있고, 이 문서 아래의 서술은 **지금 소스 그대로**다.
@@ -249,9 +249,8 @@ DB 가 죽어 있어도 서버는 뜹니다 — 인벤토리·거래만 실패�
 | `docs/EXTENSION-GUIDE.md` | 기능을 더할 때의 유형별 체크리스트 |
 | `docs/DNF-GAP-ANALYSIS.md` | 상용 MMO 와의 격차 분석 · 로드맵 |
 
-⚠️ **도면(`docs\*.pdf`)은 이 저장소에 없습니다.** 파생 원본인 `mini-game-server-portfolio` 에는
-네 장이 있는데, 그 도면들은 분리 **이전** 구조(존 스레드 · 전용 DB 워커)를 그리고 있어
-지금 소스와 어긋납니다. 재생성 절차만 `scripts\build_sheets.ps1` 에 남겨 뒀고
+⚠️ **도면(`docs\*.pdf`)은 이 저장소에 없습니다.** 이전 프로젝트에 네 장이 있었지만
+분리 **이전** 구조(존 스레드 · 전용 DB 워커)를 그리고 있어 지금 소스와 어긋납니다. 재생성 절차만 `scripts\build_sheets.ps1` 에 남겨 뒀고
 (소스 HTML 은 `docs\src\` 에 두는 것이 전제입니다 — 아직 없습니다), 지금의 정본은 위 문서 표입니다.
 
 ---
