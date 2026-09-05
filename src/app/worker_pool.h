@@ -23,11 +23,19 @@
 //  경우) 워커 하나를 계속 독점하면 다른 세션이 굶는다. 상한만큼 비우고
 //  잔량이 있으면 실행권 홀드를 쥔 채로 큐 뒤에 다시 선다 — 다른 세션에게
 //  차례를 양보하는 것이 이 재제출의 유일한 목적이다.
+//
+//  [WORK ] 통계 넷 — drains(drain_serial_queue 호출 횟수) · jobs(비운 job
+//  총합) · cap_hits(이번 배치가 kSerialDrainBatch 를 꽉 채운 횟수) ·
+//  resubmits(배치 뒤 잔량이 있어 큐 뒤에 다시 선 횟수). cap_hits 는 「이번
+//  배치가 K 개로 꽉 찼다」이고 resubmits 는 「배치 뒤 잔량이 있어
+//  재제출했다」다 — 배치 도중 새 프레임이 도착해도 재제출되므로
+//  resubmits >= cap_hits 가 항상 성립하지는 않는다.
 #pragma once
 
 #include "core/job_queue.h"
 #include "net/session.h"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -39,8 +47,11 @@ namespace net { class IocpServer; }
 
 namespace app {
 
-    // 직렬 큐 드레인 한 번의 상한(공정성). 이 숫자 자체는 안 쟀다 —
-    // send -Seq · zone_block 지연 실측으로 재평가할 몫이다.
+    // 직렬 큐 드레인 한 번의 상한(공정성). 16 은 잰 값이다(ADR-028 · drain_batch.ps1):
+    //   워커 1 격리 구성에서 다른 세션의 Echo p99 가 K=1/4/16/64 에 1.15/1.79/2.60/3.85ms —
+    //   대기 상한 = K × 단위 작업 비용 그대로다. 플러드 완료 시간은 K 에 따라 잡음 안이라
+    //   낮추면 지연만 줄고 재제출(큐 재진입)만 는다(K=4 는 16 의 4배). 그래서 16 을 유지한다.
+    //   바꿀 때는 [WORK ] cap_hits 로 상한이 실제로 걸리는 회차인지부터 확인한다.
     constexpr size_t kSerialDrainBatch = 16;
 
     class WorkerPool {
@@ -72,6 +83,15 @@ namespace app {
         std::vector<std::thread>  threads_;
         int                       worker_count_;
         net::IocpServer&          server_;
+
+        // [WORK ] 드레인 통계 — zone_block 판정3 의 try_failed>0 과 같은 역할:
+        // kSerialDrainBatch 상한이 실제로 걸렸는가의 직접 증거. 의미는 파일
+        // 상단 주석 참고. relaxed 인 이유와 패딩을 안 하는 이유는
+        // drain_serial_queue 의 증가 지점 주석에 적는다.
+        std::atomic<uint64_t>     stat_drains_{ 0 };
+        std::atomic<uint64_t>     stat_jobs_{ 0 };
+        std::atomic<uint64_t>     stat_cap_hits_{ 0 };
+        std::atomic<uint64_t>     stat_resubmits_{ 0 };
     };
 
     // 틱 히스토그램 — world/zone_manager.h 의 ZoneThreadStat 이 재던 것과 같은

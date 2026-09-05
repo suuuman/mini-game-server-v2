@@ -76,6 +76,14 @@ namespace app {
             }
         }
         threads_.clear();
+
+        core::logf("[WORK ] drains=%llu jobs=%llu cap_hits=%llu resubmits=%llu  batch=%zu workers=%d\n",
+            static_cast<unsigned long long>(stat_drains_.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(stat_jobs_.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(stat_cap_hits_.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(stat_resubmits_.load(std::memory_order_relaxed)),
+            kSerialDrainBatch,
+            worker_count_);
         core::logf("[INFO] worker pool stopped\n");
     }
 
@@ -117,6 +125,12 @@ namespace app {
     }
 
     void WorkerPool::drain_serial_queue(net::Session& session) {
+        // [WORK ] 넷 다 relaxed — 통계일 뿐 순서를 만들지 않는다. sq_mutex 가
+        // 이미 이 경로의 직렬화를 담당한다. 캐시라인 패딩도 안 넣는다 —
+        // 드레인(배치)마다 1~2회라 절대 빈도가 낮고, 같은 경로에서 바로 앞에
+        // 잡는 sq_mutex 비용이 지배적이다.
+        stat_drains_.fetch_add(1, std::memory_order_relaxed);
+
         std::array<core::Job, kSerialDrainBatch> batch;
         size_t n = 0;
         {
@@ -125,6 +139,13 @@ namespace app {
                 batch[n++] = std::move(session.serial_queue.front());
                 session.serial_queue.pop_front();
             }
+        }
+
+        stat_jobs_.fetch_add(n, std::memory_order_relaxed);
+        if (n == kSerialDrainBatch) {
+            // 잔량이 정확히 K 개라 상한에 「닿기만」 한 경우도 세지만, 그
+            // 경계는 resubmits 와의 차이로 읽는다.
+            stat_cap_hits_.fetch_add(1, std::memory_order_relaxed);
         }
 
         for (size_t i = 0; i < n; ++i) {
@@ -158,6 +179,12 @@ namespace app {
         // 잔량이 있다 — 홀드를 쥔 채로 같은 큐 뒤에 다시 선다. 워커를 놓고
         // 큐로 돌아가는 것이 공정성의 전부다: 다른 세션의 실행권이 먼저 서 있으면
         // 그쪽이 이번에 뽑힌다.
+        //
+        // push 성공 여부와 무관하게 여기서 먼저 센다 — stop() 과 경쟁해 push 가
+        // 실패하는 종료 시점 레이스에서는 1 과대 집계된다. 측정 중에는 안
+        // 일어나고 종료 직전에만 가능하므로 그대로 둔다(성공 분기 안으로
+        // 옮기면 재제출 블록의 문장 구조를 건드리게 된다).
+        stat_resubmits_.fetch_add(1, std::memory_order_relaxed);
         if (!queue_.push([this, sp = &session] { drain_serial_queue(*sp); })) {
             // stop() 이 그 사이 불렸다 — submit() 의 같은 갈래와 동일하게 정리한다.
             std::lock_guard<std::mutex> lock(session.sq_mutex);

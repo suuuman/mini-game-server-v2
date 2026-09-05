@@ -17,7 +17,7 @@
 | `config/server.ini` | `idle_timeout_sec` | **`90`**(의도값 — ADR-023. `0` 이 아니다) · 자체 스폰 10종(+`chat`)은 스크래치에서 `0` 고정 · `idle.ps1` 만 축소값 `2` |
 
 ⚠️ **정정 — 위치 이동 1건 · 소멸 1건.** `kBadTick*` 는 틱 스레드가 `zone_manager.cpp`
-(폐기됨)에서 `src/app/worker_pool.cpp` 로 옮겨 가면서 함께 옮겼다(`worker_pool.cpp:15-17` · `:274-280`
+(폐기됨)에서 `src/app/worker_pool.cpp` 로 옮겨 가면서 함께 옮겼다(`worker_pool.cpp:15-17` · `:301-307`
 실측 확인). `kDedicatedConn`(옛 `src/db/db_worker.h`)은 **행 자체가 사라졌다** — `DbWorkerPool` 이
 Step 4 에서 통째로 삭제돼 그 스위치가 걸릴 코드가 없다(§5 「소멸」 절 참조. `src` 전수 grep 으로
 `kDedicatedConn` 이 0건임을 확인했다).
@@ -228,10 +228,16 @@ ASan 은 `free` 한 메모리를 격리에 붙들어 둬서 **누수가 없어�
 |---|---|---|
 | `.\scripts\tick.ps1` | **틱 지연·지터 전용 하네스** — 고장 스위치(`-WorkMs`·`-SpikeEvery`/`-SpikeMs`)와 `[tick]` 정책을 함께 다룬다 | `[TICK ]` `[TICK2]` |
 | `.\scripts\load.ps1` | 동시 접속 N개를 붙잡은 채 왕복 지연 | 응답 시각 분포 |
-| `.\scripts\dbload.ps1` | DB 커넥션 풀 크기 실측 (서로 다른 `player_id` 로 워커를 갈라 던진다) | `[POOL2]`(⚠️ **정정** — DB 커넥션 풀 통계는 `[POOL ]`(프레임 풀 — `bootstrap.cpp` `frame_pool_stats`)가 아니라 `[POOL2]`(`db_worker.cpp` `db conns` — §3 참조)다) |
+| `.\scripts\dbload.ps1` | **워커 수 × DB 풀 크기 실측** — `-AppWorkers`·`-PoolSize` 로 스크래치 config 를 바꿔 스폰하고, 응답을 ok/busy/other 로 갈라 세며 종료 로그의 `[POOL2]`·`[WORK ]`·`[NET  ]` 를 스스로 파싱해 `RESULT` 한 줄로 낸다(T014). ~~서로 다른 `player_id` 로 워커를 가른다~~ — 그 축은 배정이 직렬 큐 유동이 되며 소멸했고 `[SKEW ]` 대조도 함께 지웠다 | `RESULT` 줄(`qps` 는 **ok 기준**) · `[POOL2] try_failed`(⚠️ DB 커넥션 풀 통계는 `[POOL ]`(프레임 풀)이 아니라 `[POOL2]` 다). ⛔ `-Traders` 를 주면 `ms` 에 거래 ACK 대기(연결당 최대 3s — `dbload.ps1:253`)가 섞여 **처리량 지표로 못 쓴다**(같은 조건 3회에서 26배 편차 실측 — ADR-028) |
+| `.\scripts\drain_batch.ps1` | **`kSerialDrainBatch` 지연·비용 실측**(T014 신설) — 플러더 세션이 인벤토리 N건을 한 번의 Write 로 쏟아 직렬 큐를 깊게 만든 채, 예약 없는 Echo 프로브의 왕복 avg/p99/max 와 플러드 완료 시간을 잰다. `-Batch K` 는 `worker_pool.h` 의 상수를 패치해 Release 를 빌드한다(`tick.ps1` 의 3겹 안전장치 · `finally` 원복) · `-AppWorkers 1` 이 격리 측정 | `RESULT` 줄 · 유효성 3종(`cap_hits>0` · `kicked=0` · `lost=0`) → **`VALID=1` 회차만 채택** · `[WORK ]` |
 
 > ⚠️ **`zone_block.ps1` 은 `player 1` 하나만 쓴다** — 워커 하나만 돌아서 풀 크기 측정에는 안 맞는다.
 > 그 목적에는 `dbload.ps1` 을 쓴다.
+>
+> ⛔ **`drain_batch.ps1 -Batch K` 는 소스(`worker_pool.h`)와 exe 를 바꾼다.** `-KeepBuild` 로 스윕했으면 마지막에 **반드시 `-Restore`** —
+> 잊으면 소스는 16 인데 exe 는 K 인 채로 다음 하네스가 돈다 — 그 상태는 exe 옆 마커 `build\x64\Release\village.exe.kSerialDrainBatch`(내용 `K=N`)가 알리고, `-Restore` 가 지운다. 확인은 `Select-String -Path src\app\worker_pool.h -Pattern 'constexpr size_t kSerialDrainBatch = \d+;'`(값 16)와
+> `git diff -- src/app/worker_pool.h | Select-String '^[+-].*constexpr size_t kSerialDrainBatch'`(0줄).
+> ⚠️ `Write-Host` 출력을 `*>` 로 파일에 받으면 **콘솔 폭(150)에서 하드 랩**돼 `RESULT` 줄이 토큰 중간에서 잘린다 — 스윕 스크립트에서 `$host.UI.RawUI.BufferSize` 폭을 넓히거나(1000 실측 OK) 콘솔로 받는다.
 >
 > ⚠️ `tick.ps1` 의 고장 스위치는 **`src/app/worker_pool.cpp` 의 `constexpr`**(`kBadTickWorkMs` ·
 > `kBadTickSpikeEvery` · `kBadTickSpikeMs`)**를 패치하고 재빌드**해야 한다.
@@ -360,6 +366,7 @@ Git Bash 의 텍스트 모드 변환이 결과를 오염시킨다. **python `b.c
 | `[ALLOC]` | **기준선 대비 추세** (절대값이 아니다) | 아래 ⛔ 참조 |
 | `[POOL ]` | `failed` = 0 | 0이 아니면 **프레임 풀**(`bootstrap.cpp` `frame_pool_stats`)이 작다 — ⚠️ **DB 커넥션 풀이 아니다**(그건 아래 `[POOL2]`) |
 | `[POOL2]` ⭐ **신설 등재**(`db_worker.cpp` — `try_acquire` 도입과 함께 생긴 DB 커넥션 풀 전용 요약) | `db conns` 줄의 `try_failed` | **`try_failed`** = `DbPool::try_acquire()` 가 그 자리서 즉시 실패한 횟수(`db_pool.h:142` `++try_failed_`) — §7-4 「락보다 먼저 빌리고, 못 빌리면 락 전에 `kBusy`」의 직접 증거이자 풀 부족 판단의 정본. **> 0 이 곧 결함은 아니다** — `zone_block.ps1` 판정3 처럼 「풀이 실제로 꽉 찼다」를 증명하는 용도로도 쓰인다. 줄에 남는 항목은 `peak`·`acquired`·`open_failed`·`discarded`·`try_failed` 다섯이다 |
+| `[WORK ]` ⭐ **T014 신설**(`worker_pool.cpp` `stop()` — 직렬 큐 드레인 통계) | `drains`·`jobs`·`cap_hits`·`resubmits`·`batch`·`workers` | 회귀 판정 지표가 아니라 **측정 유효성 지표**다 — `drain_batch.ps1` 은 `cap_hits>0` 이어야 「상한이 실제로 걸린 회차」로 채택한다. `resubmits` 는 배치 뒤 잔량이 있어 큐 뒤에 다시 선 횟수(`cap_hits` 와 다를 수 있다 — 배치 도중 새 프레임이 와도 재제출된다). 종료 직전 `stop()` 경쟁으로 `resubmits` 가 1 과대일 수 있다 |
 | `[CONN ]` | `peak` 과 `rejected` 의 관계 | peak 이 상한에 안 붙었는데 rejected 가 나면 **세션이 안 지워지고 있다** |
 | `[NET  ]` | `idle_kicked` | peak 대비 비율이 뛰면 임계가 짧거나 클라 ping 이 안 나간다 |
 | `[TICK ]` | `behind` 비율 | 틱이 밀리고 있다(⚠️ **정정** — 이 줄을 찍는 주체가 존 스레드에서 **전용 틱 스레드**(`app::worker_pool.cpp` — Step 4-f)로 바뀌었다. 의미·판정은 그대로) |
