@@ -212,16 +212,20 @@ DB 가 죽어 있어도 서버는 뜹니다 — 인벤토리·거래만 실패�
 ```powershell
 .\scripts\s2s.ps1       # S2S 커넥터 29항목 (28 통과 + SKIP 1) — 가짜 세션 서버 역할을 스스로 한다
 .\scripts\session.ps1   # 세션 서버 통합 95항목 — session.exe·village.exe 를 둘 다 스폰한다
-.\scripts\client.ps1    # C++ 클라이언트(client.exe) 회귀 35판정 — session.exe·village.exe(마을 A·B) 를 스폰한다 · 9000/9100/9200/9010
+.\scripts\client.ps1    # C++ 클라이언트(client.exe) 회귀 43판정 — session.exe·village.exe(마을 A·B) 를 스폰한다 · 9000/9100/9200/9010 · zone.ps1/churn.ps1 의 PS·-Cxx 갈래 동치 포함
+.\scripts\zone.ps1 -Cxx -Clients 8 -Zones 4 -Chats 100   # 접속·입장·채팅·판정을 client.exe zone 이 한다(스폰·예약은 래퍼)
+.\scripts\churn.ps1 -Cxx -Count 1000 -Framed              # 접속/종료 루프를 client.exe churn 이 돈다(누수 판정은 래퍼)
 ```
 
 `client.exe` 는 손으로도 돌릴 수 있습니다 — 종료 코드가 판정입니다(0 PASS · 1 판정 FAIL · 2 인자 오류 · 3 접속 실패, 마지막 줄 `RESULT: PASS|FAIL <사유>`):
 
 ```powershell
-.\build\x64\Release\client.exe selftest                                                  # 프레임 코덱 순수 함수 12항목 — 서버 불필요
+.\build\x64\Release\client.exe selftest                                                  # 순수 함수 17항목(프레임 코덱 12 + 소켓 집합 5) — 서버 불필요
 .\build\x64\Release\client.exe send --port 9000 --repeat 3000 --size 8 --framed --seq    # send.ps1 이식 — 서버를 먼저 띄운다
 .\build\x64\Release\client.exe send --port 9000 --repeat 1 --size 8 --framed --hold 7 --ping-ms 1000   # 주기 ping 으로 유휴 절단을 피한다(A15)
 .\build\x64\Release\client.exe flow --session-port 9200 --player 7001                    # 세션 로그인 → 배정 → Enter → Echo → Ping (session.exe·village.exe 둘 다 필요)
+.\build\x64\Release\client.exe churn --port 9000 --count 1000 --framed                   # 접속/교환/종료 반복 — 서버를 먼저 띄운다 · 누수 판정은 churn.ps1 -Cxx 래퍼가
+.\build\x64\Release\client.exe zone --port 9000 --clients 8 --zones 4 --chats 100        # 소켓 N개 존 입장·채팅 브로드캐스트 대조 — 예약이 필요하므로 보통 zone.ps1 -Cxx 로 부른다
 ```
 
 ⚠️ `zone_race.ps1` 은 **`assert` 가 살아 있는 구성에서만 뜻이 있습니다** — `-Config Release` 를

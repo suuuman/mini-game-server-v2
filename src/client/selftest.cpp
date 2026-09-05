@@ -17,6 +17,7 @@
 
 #include "commands.h"
 #include "frame_codec.h"
+#include "socket_set.h"
 
 #include "proto/packet.h"
 
@@ -245,6 +246,136 @@ namespace client {
 			return {true, ""};
 		}
 
+		// T016 이식 — socket_set.h 순수 함수(§7). n==0 분기는 docs/TESTING.md
+		// 「못 덮는 것」 T015 행이 지적한 구멍이다 — 기존 12항목 어디도
+		// bytes_equal 의 n==0 memcmp 우회 분기를 두드리지 않았다.
+		TestResult test_bytes_equal_n0() {
+			if (!bytes_equal(std::vector<uint8_t>{}, nullptr, 0)) {
+				return {false, "true vs false (빈 벡터·nullptr·n=0)"};
+			}
+			const uint8_t one[1] = {0x02};
+			if (bytes_equal(std::vector<uint8_t>{1}, one, 1)) {
+				return {false, "false vs true ({1} vs {2}인데 통과)"};
+			}
+			return {true, ""};
+		}
+
+		TestResult test_zone_of_round_robin() {
+			const uint32_t zone_id = 5;
+			const uint32_t expected[8] = {5, 6, 7, 8, 5, 6, 7, 8};
+			for (size_t i = 0; i < 8; ++i) {
+				const uint32_t z = zone_of(i, zone_id, 4);
+				if (z != expected[i]) {
+					return {false, "zones=4 i=" + std::to_string(i) + ": " + std::to_string(expected[i]) + " vs " + std::to_string(z)};
+				}
+			}
+			for (size_t i = 0; i < 8; ++i) {
+				const uint32_t z = zone_of(i, zone_id, 1);
+				if (z != zone_id) {
+					return {false, "zones=1 i=" + std::to_string(i) + ": 5 vs " + std::to_string(z)};
+				}
+			}
+			const uint32_t z0 = zone_of(0, zone_id, 0);
+			if (z0 != zone_id) {
+				return {false, "zones=0: 5 vs " + std::to_string(z0)};
+			}
+			return {true, ""};
+		}
+
+		TestResult test_expect_count_floor() {
+			struct Case {
+				uint64_t clients;
+				uint64_t zones;
+				uint64_t chats;
+				uint64_t expected;
+			};
+			const Case cases[] = {
+				{8, 4, 100, 200},
+				{7, 4, 100, 100},
+				{3, 4, 100, 0},
+				{8, 1, 100, 800},
+				{8, 0, 100, 0},
+			};
+			for (const Case& c : cases) {
+				const uint64_t got = expect_count(c.clients, c.zones, c.chats);
+				if (got != c.expected) {
+					return {false, "(" + std::to_string(c.clients) + "," + std::to_string(c.zones) + "," + std::to_string(c.chats)
+						+ ")=" + std::to_string(c.expected) + " vs " + std::to_string(got)};
+				}
+			}
+			return {true, ""};
+		}
+
+		// 24B(8B 프레임 3개 · id 103,103,102)를 [0,10) [10,21) [21,24) 세
+		// 조각으로 나눠 먹인다 — 이 경계는 5단계 R1 개발 HIGH 가 잡은
+		// 산술 오류(초안의 「30B · [10,25)[25,30)」는 3×8B=24B 를 안
+		// 맞춘 값이었다)를 정정한 것이다.
+		TestResult test_tally_feed_split() {
+			const uint8_t body[4] = {0, 0, 0, 0};
+			const std::vector<uint8_t> f1 = build_frame(proto::MsgId::kChatNtf, body, 4);
+			const std::vector<uint8_t> f2 = build_frame(proto::MsgId::kChatNtf, body, 4);
+			const std::vector<uint8_t> f3 = build_frame(proto::MsgId::kJoinZoneAck, body, 4);
+
+			std::vector<uint8_t> stream;
+			stream.insert(stream.end(), f1.begin(), f1.end());
+			stream.insert(stream.end(), f2.begin(), f2.end());
+			stream.insert(stream.end(), f3.begin(), f3.end());
+			if (stream.size() != 24) {
+				return {false, "24B vs " + std::to_string(stream.size())};
+			}
+
+			FrameTally t;
+
+			tally_feed(t, stream.data() + 0, 10);
+			uint32_t got103 = t.by_id.count(103) ? t.by_id[103] : 0;
+			if (got103 != 1 || tally_partial_bytes(t) != 2) {
+				return {false, "[0,10): by_id[103]=1,partial=2 vs by_id[103]=" + std::to_string(got103)
+					+ ",partial=" + std::to_string(tally_partial_bytes(t))};
+			}
+
+			tally_feed(t, stream.data() + 10, 11);
+			got103 = t.by_id.count(103) ? t.by_id[103] : 0;
+			if (got103 != 2 || tally_partial_bytes(t) != 5) {
+				return {false, "[10,21): by_id[103]=2,partial=5 vs by_id[103]=" + std::to_string(got103)
+					+ ",partial=" + std::to_string(tally_partial_bytes(t))};
+			}
+
+			tally_feed(t, stream.data() + 21, 3);
+			got103 = t.by_id.count(103) ? t.by_id[103] : 0;
+			const uint32_t got102 = t.by_id.count(102) ? t.by_id[102] : 0;
+			if (got103 != 2 || got102 != 1 || tally_partial_bytes(t) != 0 || t.protocol_error) {
+				return {false, "[21,24): 103=2,102=1,partial=0,protocol_error=false vs 103=" + std::to_string(got103)
+					+ ",102=" + std::to_string(got102) + ",partial=" + std::to_string(tally_partial_bytes(t))
+					+ ",protocol_error=" + (t.protocol_error ? "true" : "false")};
+			}
+			return {true, ""};
+		}
+
+		// socket_set.h 순수 함수(§C, 7단계 코드 리뷰 test MED) — pump_once
+		// 안에 묻혀 있던 인덱스 리매핑을 selftest 가 소켓 없이 직접
+		// 두드린다. 「닫힌 peer 가 앞쪽에 섞인」 조합은 select 타이밍에
+		// 좌우돼 하네스로 결정적으로 재현하기 어렵다.
+		TestResult test_remap_ready_closed_peer() {
+			std::vector<size_t> out;
+
+			remap_ready(std::vector<size_t>{0, 2, 3}, std::vector<size_t>{1, 2}, out);
+			if (out != std::vector<size_t>{2, 3}) {
+				return {false, "{2,3} vs size=" + std::to_string(out.size())};
+			}
+
+			remap_ready(std::vector<size_t>{0, 2, 3}, std::vector<size_t>{}, out);
+			if (!out.empty()) {
+				return {false, "{}(빈 ready) vs size=" + std::to_string(out.size())};
+			}
+
+			remap_ready(std::vector<size_t>{5}, std::vector<size_t>{0}, out);
+			if (out != std::vector<size_t>{5}) {
+				return {false, "{5} vs size=" + std::to_string(out.size())};
+			}
+
+			return {true, ""};
+		}
+
 		struct NamedTest {
 			const char* name;
 			TestResult (*fn)();
@@ -266,6 +397,11 @@ namespace client {
 			{"echo_pattern", test_echo_pattern},
 			{"expect_frame_and_expect_frame_min", test_expect_frame},
 			{"bytes_equal", test_bytes_equal},
+			{"bytes_equal_n0", test_bytes_equal_n0},
+			{"zone_of_round_robin", test_zone_of_round_robin},
+			{"expect_count_floor", test_expect_count_floor},
+			{"tally_feed_split", test_tally_feed_split},
+			{"remap_ready_closed_peer", test_remap_ready_closed_peer},
 		};
 		const int total = static_cast<int>(sizeof(tests) / sizeof(tests[0]));
 		int pass = 0;

@@ -49,17 +49,6 @@
 
 namespace client {
 
-	namespace {
-
-		// PowerShell 의 부울 보간(예: $Framed.IsPresent)은 "True"/"False"
-		// (대문자)로 찍힌다 — send.ps1 원문과 나란히 읽을 수 있도록 같은
-		// 대소문자를 쓴다(T015-impl.md 결정 4 — 출력 문구는 send.ps1 재현).
-		const char* ps_bool(bool b) {
-			return b ? "True" : "False";
-		}
-
-	}	// namespace
-
 	int run_send(const Args& args) {
 		const std::string host = args.get("host", "127.0.0.1");
 		const int64_t port_raw = args.get_int("port", 9000, 0, 65535);

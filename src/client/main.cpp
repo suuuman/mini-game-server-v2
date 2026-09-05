@@ -55,6 +55,16 @@ int main(int argc, char** argv) {
 		return client::run_flow(args);
 	}
 
+	if (sub == "zone") {
+		const client::Args args(argc, argv, 2);
+		return client::run_zone(args);
+	}
+
+	if (sub == "churn") {
+		const client::Args args(argc, argv, 2);
+		return client::run_churn(args);
+	}
+
 	// 알 수 없는 서브커맨드 — usage + kUsage(2).
 	client::print_usage();
 	return static_cast<int>(client::ExitCode::kUsage);

@@ -40,6 +40,19 @@
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <ItemDefinitionGroup>
+    <!-- FD_SETSIZE 를 1024 로 올린다 — 기본값은 winsock2.h 의 64 다. MS Learn "Maximum Number of Sockets Supported" — "the implementor should define the manifest FD_SETSIZE in every source file before including the Winsock2.h header file"(2026-09-06 열람).
+         이 /D 정의가 실제로 각 소스의 winsock2.h include 보다 먼저
+         닿는지는 socket_set.h 의 static_assert(FD_SETSIZE >= 1024, ...)
+         가 컴파일 타임에 증명한다 — 안 닿으면 기본값 64 에서 그 자리가
+         바로 실패한다. 1024 인 근거 — 후보 B(L1 경합 고부하 실측 ·
+         ADR-028 미검증 ③)가 이 클라로 수백 접속을 돌릴 예정이라 미리
+         올려 둔다. 정확한 상한은 잰 적이 없다(T016-plan.md 결정 2).
+         common.props(서버 exe 공용)가 아니라 여기 두는 이유 —
+         common.lib·village.exe·session.exe 는 IOCP 라 select 를 안
+         쓴다, FD_SETSIZE 가 그 셋에는 아무 의미가 없다. -->
+    <ClCompile>
+      <PreprocessorDefinitions>FD_SETSIZE=1024;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <!-- common.lib 를 ProjectReference 로 물지 않는 이유 — proto/packet.h 는
@@ -68,12 +81,15 @@
     <ClCompile Include="..\src\client\cmd_send.cpp" />
     <ClCompile Include="..\src\client\cmd_flow.cpp" />
     <ClCompile Include="..\src\client\selftest.cpp" />
+    <ClCompile Include="..\src\client\cmd_zone.cpp" />
+    <ClCompile Include="..\src\client\cmd_churn.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\client\commands.h" />
     <ClInclude Include="..\src\client\args.h" />
     <ClInclude Include="..\src\client\frame_codec.h" />
     <ClInclude Include="..\src\client\tcp_client.h" />
+    <ClInclude Include="..\src\client\socket_set.h" />
   </ItemGroup>
   <!-- ProjectReference 없음 — common.vcxproj 를 참조하지 않는다(위 주석 참조). -->
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -1,10 +1,26 @@
 ﻿# scripts\client.ps1 — C++ 클라이언트(client.exe) 회귀 하네스, B 갈래 자체 스폰
 #
-#   무엇을 검증하는가 — client.exe 의 send/flow/selftest 세 서브커맨드를
-#   실제 session.exe·village.exe 앞에서 35건 판정한다(T015-plan.md §11-2).
-#   서버 소스는 이 워크트리에서 한 줄도 바뀌지 않았으므로 기존 PowerShell
-#   하네스 14종을 다시 돌리지 않는다 — 이 파일은 그 대체가 아니라 client.exe
-#   라는 새 소비자의 첫 회귀다(회귀는 이것을 더해 15종 — docs/TESTING.md §2).
+#   무엇을 검증하는가 — client.exe 의 send/flow/selftest/zone/churn 다섯
+#   서브커맨드를 실제 session.exe·village.exe 앞에서 43건 판정한다
+#   (T015-plan.md §11-2 · T016 이 S22~S29 로 zone.ps1/churn.ps1 과의
+#   PS↔C++ 동치·실패 경로·usage 경계를 더했다). 서버 소스는 이 워크트리
+#   에서 한 줄도 바뀌지 않았으므로 기존 PowerShell 하네스 14종을 다시
+#   돌리지 않는다 — 이 파일은 그 대체가 아니라 client.exe 라는 새
+#   소비자의 첫 회귀다(회귀는 이것을 더해 15종 — docs/TESTING.md §2).
+#
+#   S22·S23(churn.ps1 동치)은 이 하네스의 마을 A(9000)가 아직 살아 있는
+#   동안 돈다 — churn.ps1 은 스스로 서버를 안 띄우고 이미 떠 있는 것에
+#   접속한다. S26 은 그 바로 뒤에서 `client churn` 을 직접 불러 게이트
+#   뒤 msg-id 로 3/3 실패시키는 실패 경로를 본다(뮤턴트 MUT-C1·C2 판정자
+#   — 7단계 test 렌즈 HIGH-2 가 잡은, "정상 경로만으로는 이 뮤턴트들이
+#   안 죽는다"는 결함의 정정). S24·S25·S27(zone.ps1 동치)은 마을 A·세션·
+#   마을 B 를 전부 정지한 뒤 돈다 — zone.ps1 은 스스로 village.exe 를
+#   새로 스폰하는데, Start-Village 가 기동 전에 같은 이름의 기존
+#   프로세스를 전부 죽이므로(harness_common.ps1:489) 마을 A 와 같이 떠
+#   있으면 충돌한다. S27 은 `-Churn 10` 조합을 돌려 known 집합에 112 를
+#   넣은 것(A12)을 실증한다 — PS 갈래는 같은 조합에서 ✕ 를 낸다(의도된
+#   비동치, cmd_zone.cpp 머리말 참조). S28·S29 는 서버가 필요 없는
+#   `zone` usage 경계(`clients<zones` · `--clients` 상한 초과)다.
 #
 #   단독 실행인 이유 — session.ps1 과 같은 두 서버(세션 클라 포트 9200 ·
 #   S2S 수용 포트 9100 · 마을 A 클라 포트 9000)를 쓰고, S4 전용 마을 B 도
@@ -219,6 +235,14 @@ try {
     $r = Invoke-Client @('send', '--port', '9019', '--repeat', '1', '--framed')
     Add-Result 'S7' (($r.Code -eq 3) -and ($r.Lines -contains 'RESULT: FAIL connect')) "exit=$($r.Code)"
 
+    # ── S28·S29 — zone 의 usage 경계(서버 불요) ───────────────────────────
+    $r = Invoke-Client @('zone', '--clients', '3', '--zones', '4')
+    $s28Pass = ($r.Code -eq 2) -and (@($r.Lines -like 'zone: clients(3) < zones(4)*').Count -gt 0)
+    Add-Result 'S28' $s28Pass "exit=$($r.Code) (expect_count==0 — clients<zones)"
+
+    $r = Invoke-Client @('zone', '--clients', '1025')
+    Add-Result 'S29' ($r.Code -eq 2) "exit=$($r.Code) (--clients 상한 FD_SETSIZE=1024 초과)"
+
     # ── S8~S21 — 전부 마을 A(9000)·세션(9200) 앞에서 돈다(마을 A 정지 전에 끝낸다) ──
 
     $r = Invoke-Client @('send', '--port', '9000', '--repeat', '3', '--size', '4', '--expect-close', '--timeout', '1500')
@@ -262,6 +286,36 @@ try {
 
     $r = Invoke-Client @('send', '--port', 'abc')
     Add-Result 'S21' (($r.Code -eq 2) -and ($r.Lines.Count -gt 0) -and ($r.Lines[0] -eq 'client <subcommand> [--key value] [--flag]')) "exit=$($r.Code) (args.ok()==false — 숫자 인자 오류)"
+
+    # ── S22·S23 — churn.ps1 PS↔C++ 동치(마을 A 생존 중) ───────────────────
+    if ($Config -eq 'ASan') {
+        # churn.ps1 은 ASan 서버 앞에서 스스로 거부한다(Test-Asan — free 한
+        # 메모리를 격리에 붙들어 두어 누수 측정에 못 쓴다, TESTING §2) —
+        # 그 갈래를 또 재현하지 않고 그대로 SKIP 으로 기록한다.
+        Add-Result 'S22' $true 'SKIP — churn.ps1 은 ASan 서버를 스스로 거부한다(TESTING §2)'
+        Add-Result 'S23' $true 'SKIP — churn.ps1 은 ASan 서버를 스스로 거부한다(TESTING §2)'
+    } else {
+        Write-Host "-- churn.ps1 -Port 9000 -Count 300 -Framed"
+        $s22Lines = & powershell -NoProfile -File (Join-Path $PSScriptRoot 'churn.ps1') -Port 9000 -Count 300 -Framed 2>&1
+        $s22Lines | ForEach-Object { Write-Host "   $_" }
+        $s22Pass = @(($s22Lines | ForEach-Object { "$_" }) -like '판정  : ○*').Count -gt 0
+        Add-Result 'S22' $s22Pass 'churn.ps1(PS 갈래) 판정 ○'
+
+        Write-Host "-- churn.ps1 -Cxx -Config $Config -Port 9000 -Count 300 -Framed"
+        $s23Lines = & powershell -NoProfile -File (Join-Path $PSScriptRoot 'churn.ps1') -Cxx -Config $Config -Port 9000 -Count 300 -Framed 2>&1
+        $s23Code = $LASTEXITCODE
+        $s23Lines | ForEach-Object { Write-Host "   $_" }
+        $s23LinesStr = @($s23Lines | ForEach-Object { "$_" })
+        # 래퍼(before/after 통계)의 누수 판정 줄도 같이 본다 — client.exe
+        # 쪽 count=300 failed=0 만 보면 래퍼가 그 뒤에 붙이는 누수 판정
+        # 자체가 깨져도 S23 이 못 잡는다(7단계 test 렌즈 HIGH-1).
+        $s23Pass = ($s23Code -eq 0) -and (@($s23LinesStr -like 'churn : count=300 failed=0*').Count -gt 0) -and (@($s23LinesStr -like '판정  : ○*').Count -gt 0)
+        Add-Result 'S23' $s23Pass "exit=$s23Code + 판정 ○"
+    }
+
+    $r = Invoke-Client @('churn', '--port', '9000', '--count', '3', '--msg-id', '2', '--framed')
+    $s26Pass = ($r.Code -eq 1) -and (@($r.Lines -like 'churn : count=3 failed=3*').Count -gt 0)
+    Add-Result 'S26' $s26Pass '게이트 뒤 id 로 3/3 실패 → exit 1(MUT-C1·C2 판정자)'
 
     # ── 마을 A 정지 → S5(3건) ─────────────────────────────────────────────
     # Stop-Harness 는 $ScratchRoot 를 마지막 Remove-Item(SilentlyContinue) 에만
@@ -333,8 +387,37 @@ try {
     $netBMatch = [regex]::Match($vilBLogText, '\[NET  \] idle_kicked=1\b')
     Add-Result 'S4c' $netBMatch.Success "$(if ($netBMatch.Success) { $netBMatch.Value } else { '[NET  ] idle_kicked=1 줄 없음' })"
 
+    # ── S24·S25 — zone.ps1 PS↔C++ 동치(전 서버 정지 상태 — zone.ps1 이
+    #    스스로 village.exe 를 새로 스폰한다) ────────────────────────────
+    Write-Host "-- zone.ps1 -Config $Config -Clients 8 -Zones 4 -Chats 100"
+    $s24Lines = & powershell -NoProfile -File (Join-Path $PSScriptRoot 'zone.ps1') -Config $Config -Clients 8 -Zones 4 -Chats 100 2>&1
+    $s24Lines | ForEach-Object { Write-Host "   $_" }
+    $s24Pass = @(($s24Lines | ForEach-Object { "$_" }) -like '판정  : ○*').Count -gt 0
+    Add-Result 'S24' $s24Pass 'zone.ps1(PS 갈래) 판정 ○'
+
+    Write-Host "-- zone.ps1 -Cxx -Config $Config -Clients 8 -Zones 4 -Chats 100"
+    $s25Lines = & powershell -NoProfile -File (Join-Path $PSScriptRoot 'zone.ps1') -Cxx -Config $Config -Clients 8 -Zones 4 -Chats 100 2>&1
+    $s25Code = $LASTEXITCODE
+    $s25Lines | ForEach-Object { Write-Host "   $_" }
+    $s25Pass = ($s25Code -eq 0) -and (@(($s25Lines | ForEach-Object { "$_" }) -like 'zone  : clients=8 zones=4 expect=200 joined=8 bad=0 broken=0 closed=0*').Count -gt 0)
+    Add-Result 'S25' $s25Pass "exit=$s25Code"
+
+    Write-Host "-- zone.ps1 -Cxx -Config $Config -Clients 8 -Zones 4 -Chats 100 -Churn 10"
+    $s27Lines = & powershell -NoProfile -File (Join-Path $PSScriptRoot 'zone.ps1') -Cxx -Config $Config -Clients 8 -Zones 4 -Chats 100 -Churn 10 2>&1
+    $s27Code = $LASTEXITCODE
+    $s27Lines | ForEach-Object { Write-Host "   $_" }
+    $s27LinesStr = @($s27Lines | ForEach-Object { "$_" })
+    # A12(known 에 112 를 넣은 것)의 실증 — churn 모드인데도 zone 요약이
+    # closed=0·broken=0 으로 깨끗하고, other-ids 줄이 단 하나도 없어야
+    # 한다(PS 갈래는 이 조합에서 ✕ 를 낸다 — 의도된 비동치, cmd_zone.cpp
+    # 머리말 참조).
+    $s27Pass = ($s27Code -eq 0) `
+        -and (@($s27LinesStr -like 'zone  : clients=8 zones=4 expect=200 joined=8 bad=0 broken=0 closed=0*').Count -gt 0) `
+        -and (@($s27LinesStr -like '*other-ids=*').Count -eq 0)
+    Add-Result 'S27' $s27Pass "exit=$s27Code (A12 실증 — other-ids 없음 · MUT-Z5 판정자)"
+
     # ── 총수 자기 검증 + 요약 ──────────────────────────────────────────────
-    $expectedTotal = 35
+    $expectedTotal = 43
     $actualTotal = $script:MatrixResults.Count
     $countMismatch = ($actualTotal -ne $expectedTotal)
     if ($countMismatch) {
