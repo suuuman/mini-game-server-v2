@@ -13,6 +13,7 @@
 #   사용:
 #     .\zone.ps1 -Clients 8 -Chats 100
 #     .\zone.ps1 -Clients 8 -Chats 500 -ZoneId 5
+#     .\zone.ps1 -Cxx -Clients 8 -Zones 4 -Chats 100   # 접속·Enter·입장·채팅·판정을 client.exe zone 이 한다(ADR-030 결정 5)
 
 param(
     [int]$Port    = 9000,
@@ -25,7 +26,8 @@ param(
     [int]$Timeout = 5000,
     [int]$Settle  = 1500,       # 마지막 채팅 뒤 이만큼 더 기다렸다 읽는다 (ms)
     [string]$Config  = 'Release',   # 예약 경유 접속을 위해 스스로 스폰할 village.exe 구성
-    [int]$Seconds    = 180          # 스폰한 village.exe 의 수명(초) — 이 하네스 시나리오 전체를 덮을 여유
+    [int]$Seconds    = 180,         # 스폰한 village.exe 의 수명(초) — 이 하네스 시나리오 전체를 덮을 여유
+    [switch]$Cxx                    # 접속·Enter·입장·채팅·판정을 client.exe zone 이 한다
 )
 
 $ErrorActionPreference = 'Stop'
@@ -107,6 +109,18 @@ try {
     $listener = Start-FakeSession 9100
     $villageProc = Start-Village $Config $vhome $Seconds
     $link = Accept-FakeSessionLink $listener
+
+    if ($Cxx) {
+        # ── C++ 갈래(ADR-030 결정 5) — 예약 N건만 여기서 넣고, 접속·Enter·입장·채팅·판정은 client.exe zone 이 한다.
+        #    같은 래퍼(스폰·가짜 세션·Stop-Harness)를 쓰므로 PS 갈래와의 동치는 「같은 서버·같은 예약·같은 판정 문구」다.
+        for ($i = 1; $i -le $Clients; $i++) { Grant-Reservation $link ([uint64]$i) }
+        $exe = Join-Path (Split-Path -Parent $PSScriptRoot) "build\x64\$Config\client.exe"
+        $cxxLines = & $exe zone --port $Port --clients $Clients --zone-id $ZoneId --zones $Zones --chats $Chats --size $Size --churn $Churn --timeout $Timeout --settle $Settle --player-base 1 2>&1
+        $cxxCode = $LASTEXITCODE
+        $cxxLines | ForEach-Object { "$_" }
+        if ($cxxCode -ne 0) { "판정  : ✕ client zone exit=$cxxCode" }
+        exit $cxxCode
+    }
 
     # ── 1. 접속 — 예약 발급 → Enter 까지 Connect-Reserved 하나로 끝낸다 ──
     $cli = @()

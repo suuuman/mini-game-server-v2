@@ -11,6 +11,7 @@
 #   사용:
 #     .\churn.ps1 -Count 1000 -Framed
 #     .\churn.ps1 -Count 1000 -NoExchange     # 연결만 하고 바로 끊는다
+#     .\churn.ps1 -Cxx -Count 1000 -Framed    # 루프를 client.exe churn 이 돈다(ADR-030 결정 4·5)
 
 param(
     [int]$Port        = 9000,
@@ -20,7 +21,9 @@ param(
     [int]$Report      = 100,          # 몇 회마다 중간 보고
     [string]$Process  = 'village',
     [switch]$Framed,
-    [switch]$NoExchange               # 주고받지 않고 연결/종료만 반복
+    [switch]$NoExchange,              # 주고받지 않고 연결/종료만 반복
+    [switch]$Cxx,                     # 접속/교환/종료 루프를 client.exe churn 이 돈다
+    [string]$Config   = 'Release'     # client.exe 위치용(서버 구성과 무관)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -83,13 +86,30 @@ if (Test-Asan $Process) {
 
 $before = Get-ServerStat $Process
 Show-Stat 'before' $before
+
+$loopCount = $Count
+if ($Cxx) {
+    # ── C++ 갈래(ADR-030 결정 4·5) — 접속/교환/종료 루프만 client.exe churn 이 돈다. before/after 통계·델타 판정은 그대로 이 래퍼가 한다.
+    #    중간 보고 줄(-Report 마다 서버 통계)은 이 갈래에 없다 — 클라는 서버 프로세스를 관측하지 않는다.
+    #    ⚠️ 아래 PS 갈래의 "time  : … 실패 $failed 회" 줄은 루프를 안 돌아 실패 0 으로 찍힌다 — 실제 실패 수는 위 client 의
+    #    "churn : count=N failed=F" 줄이 정본이다(11단계 correctness LOW). delta 판정의 $per 는 $Count 로 나누므로 영향 없다.
+    $exe = Join-Path (Split-Path -Parent $PSScriptRoot) "build\x64\$Config\client.exe"
+    $cxxArgs = @('churn', '--port', $Port, '--count', $Count, '--size', $Size, '--msg-id', $MsgId, '--report', $Report)
+    if ($Framed)     { $cxxArgs += '--framed' }
+    if ($NoExchange) { $cxxArgs += '--no-exchange' }
+    $cxxLines = & $exe @cxxArgs 2>&1
+    $cxxCode = $LASTEXITCODE
+    $cxxLines | ForEach-Object { "$_" }
+    $loopCount = 0
+}
+
 "churn : $Count 회  exchange=$(-not $NoExchange.IsPresent)  unit=$($unit.Length)B"
 ""
 
 $sw     = [System.Diagnostics.Stopwatch]::StartNew()
 $failed = 0
 
-for ($i = 1; $i -le $Count; $i++) {
+for ($i = 1; $i -le $loopCount; $i++) {
     try {
         $c = [System.Net.Sockets.TcpClient]::new('127.0.0.1', $Port)
         $s = $c.GetStream()
@@ -150,3 +170,5 @@ if ($null -ne $before -and $null -ne $after) {
 ""
 "참고  : 연속으로 여러 번 돌리면 클라이언트 쪽 TIME_WAIT 가 쌓인다."
 "        netstat -an | Select-String TIME_WAIT | Measure-Object | % Count"
+
+if ($Cxx) { exit $cxxCode }

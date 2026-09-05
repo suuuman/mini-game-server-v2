@@ -111,6 +111,11 @@ namespace client {
 		// SO_LINGER{1,0} → closesocket. RST 로 즉시 끊는다.
 		void close_rst();
 
+		// socket_set.h 의 select_readable 만 쓴다 — 쓰기·소유권 이전 없음.
+		// 이 접근자 하나가 다중 소켓 select 를 위한 유일한 노출이다
+		// (ADR-030 결정 1 — 리스크 §3-1 최소 노출).
+		SOCKET native() const { return sock_; }
+
 	private:
 		SOCKET sock_;
 		int last_send_error_;

@@ -46,6 +46,10 @@ namespace client {
 	int run_send(const Args& args);
 	int run_flow(const Args& args);
 
+	// T016 이식 — zone.ps1(run_zone, Step 3) · churn.ps1(run_churn, Step 2).
+	int run_zone(const Args& args);
+	int run_churn(const Args& args);
+
 	// frame_codec.h 순수 함수 단위 테스트 — Step 2 에서 항목을 채운다.
 	int run_selftest();
 
@@ -57,9 +61,20 @@ namespace client {
 			"subcommands:\n"
 			"  send      raw/framed TCP 왕복 (send.ps1 이식)\n"
 			"  flow      로그인 -> 배정 -> Enter -> Echo -> Ping\n"
+			"  zone      N 소켓 존 입장 + 채팅 브로드캐스트 대조 (zone.ps1 이식)\n"
+			"  churn     접속/종료 반복 (churn.ps1 이식 — 서버 통계 판정은 래퍼)\n"
 			"  selftest  frame_codec.h 순수 함수 단위 테스트\n"
 			"  help      이 화면\n"
 		);
+	}
+
+	// PowerShell 의 부울 보간(예: $Framed.IsPresent)은 "True"/"False"
+	// (대문자)로 찍힌다 — send.ps1/churn.ps1 원문과 나란히 읽을 수 있도록
+	// 같은 대소문자를 쓴다(T015-impl.md 결정 4). send·churn 이 PS 의
+	// `True`/`False` 문구를 재현한다 — cmd_send.cpp 익명 네임스페이스에
+	// 있던 정의를 T016 에서 이리로 옮겨 공유한다(중복 정의 금지).
+	inline const char* ps_bool(bool b) {
+		return b ? "True" : "False";
 	}
 
 	// 판정 줄 — 항상 마지막 줄이다. reason 은 pass==true 면 무시된다(nullptr 허용).

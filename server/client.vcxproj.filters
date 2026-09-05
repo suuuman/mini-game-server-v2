@@ -16,6 +16,12 @@
     <ClCompile Include="..\src\client\selftest.cpp">
       <Filter>src\client</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\client\cmd_zone.cpp">
+      <Filter>src\client</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\client\cmd_churn.cpp">
+      <Filter>src\client</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="src">
@@ -36,6 +42,9 @@
       <Filter>src\client</Filter>
     </ClInclude>
     <ClInclude Include="..\src\client\tcp_client.h">
+      <Filter>src\client</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\client\socket_set.h">
       <Filter>src\client</Filter>
     </ClInclude>
   </ItemGroup>

@@ -1398,6 +1398,47 @@ B. **kSerialDrainBatch** — `drain_batch.ps1` K ∈ {1,4,16,64} · 2회 중앙�
 
 ---
 
+## ADR-030 — `client.exe` 에 단일 스레드 `select` 소켓 집합 드라이버로 다중 접속 모드를 세우고, `zone`·`churn` 하네스의 클라 트래픽을 이식하되 스폰·서버 통계 판정은 PowerShell 래퍼(`-Cxx` 스위치)에 남긴다
+
+**상태**: **확정 · 구현 결과 — 실측** (2026-09-06 · T016 hard-dev 자율 진행 모드 — lead 자체 승인 A1~A12 · 제안 시점 문안은 그대로 두고 아래 「구현 결과」 절을 덧붙였다)
+
+**맥락**: 첫 조각(ADR-029)은 단일 연결·블로킹 모델이라 다중 접속이 없었다 — 그래서 ① 나머지 13종 하네스 중 동시 접속이 필요한 것(`zone` 등)을 이식할 수 없고, ② ADR-028 이 남긴 이월 실측 3건(L1 경합 고부하 · `[io] worker_threads` · 느린 DB 격리)이 PS 클라의 「워커 9~11 한도」 뒤에 그대로 갇혀 있었다. 후보 넷(7단계 다음 조각 / 이월 실측 / 직렬 큐 상한 / TCP_NODELAY)을 포트폴리오 가치 > 리스크 > 소요 순으로 비교해 오퍼레이터가 「다중 접속 모드 + `zone`·`churn` 이식」을 골랐다(2026-09-06). 직렬 큐 상한 후보는 전제가 틀렸다 — 세션별 상한은 없지만 전역 상한이 `frame_pool_capacity`(ADR-006 「풀 용량이 곧 큐 상한」)로 이미 있다.
+
+**결정**:
+
+| # | 결정 | 근거 |
+|---|---|---|
+| 1 | **스레드 0개 — 소켓 N개를 fd_set 하나에 넣고 `select` 한 번으로 구동한다.** `TcpClient` 는 무수정에 가깝게(읽기 전용 `native()` 접근자 1개) 두고, 헤더 전용 `src/client/socket_set.h` 에 `select_readable`·`PeerState`(소켓별 수신 누적·잔여·id 별 개수)·`feed`·`zone_of`·`expect_count` 순수 함수를 둔다. 수신은 「집합 select → 준비된 소켓에 `recv_some(timeout_ms=0)` 1회」 | ADR-029 결정 3(블로킹+`select`)과 양립 — 버린 대안 「동시 송수신 스레드」와 다른 축. `select` 는 `TcpClient::recv_some` 안에 갇혀 있고 `sock_` 가 private 라 접근자가 필요하다(`tcp_client.cpp:143-161` · `tcp_client.h:119-120`). 소켓별 `recv_exact`/`read_frame` 을 부르면 한 소켓의 부분 수신이 다른 소켓의 select 기회를 뺏는다(리스크 §1①) |
+| 2 | **`FD_SETSIZE=1024` 는 `server\client.vcxproj` 의 `PreprocessorDefinitions` 에만 정의**하고 `socket_set.h` 의 `static_assert(FD_SETSIZE >= 1024)` 가 도달을 증명한다. `common.props` 무변경 | MS Learn *"the implementor should define the manifest FD_SETSIZE in every source file before including the Winsock2.h header file"* · *"The default value in Winsock2.h is 64"*(2026-09-06 열람) — 저장소에 재정의 0건이었고 클라의 `winsock2.h` include 는 `tcp_client.h:42` 한 곳 |
+| 3 | **`client zone`** — `zone.ps1` 의 param(정본 `zone.ps1:18-31`)·절차(`:125-230`)·판정 문구(`:263-278`)를 그대로 재현. `--player-base` 로 래퍼가 발급한 예약 id 와 잇는다. churn 모드의 `alive`(PS 는 `Get-Process`)는 「닫힌 소켓 0」으로 대체하고 문구에 `(closed=0)` 을 붙여 차이를 드러낸다 | 동치 판정의 정본은 PS 판정 표(조사 B §1-3). 클라는 서버 프로세스를 관측하지 않는다(결정 5) |
+| 4 | **`client churn`** — `churn.ps1` 의 순차 connect→교환→close 루프만 이식. 메모리·핸들 델타·「연속 3회」·ASan 거부는 `churn.ps1` 에 남긴다 | `Get-ServerStat`(타 프로세스 관측)은 ADR-029 결정 2·「client.exe 가 서버 스폰」 기각과 같은 논리로 클라 밖. Echo 는 예약 게이트 앞 `case`(`frame_router.cpp:1245-1261`)라 예약 없이 통과 |
+| 5 | **래퍼 통합은 기존 `zone.ps1`·`churn.ps1` 에 `-Cxx` 스위치** — 스폰·가짜 세션 예약·서버 통계 판정은 공유하고 트래픽 생성부만 `client.exe` 호출로 바꾼다. PS 갈래는 **로직 무변경** — `zone.ps1` 은 `-Cxx` 블록 삽입만, `churn.ps1` 은 삽입 + `for` 헤더 1줄(`$Count`→`$loopCount` · `-Cxx` 아니면 같은 값)(11단계 boundary LOW 로 문구 정밀화 — 초안은 「바이트 무변경」). `harness_common.ps1` 무수정 | 새 래퍼(`zone_cxx.ps1`)를 만들면 스폰·예약·판정 ~100줄의 사본이 생겨 드리프트(M-009)하고 「같은 래퍼 · 두 생성기 · 같은 판정」이라는 동치 근거가 사라진다. 리스크 분석은 (b) 신설을 권고했으나 그 기각 근거(「B갈래 충돌」·「하네스 수정 0」)가 실물과 맞지 않아 lead 가 뒤집었다(A5 — 플랜 §9) |
+| 6 | **기계 계약은 ASCII 로 한정** — 종료 코드(0/1/2/3 · ADR-029 결정 4) · `RESULT: PASS\|FAIL <ascii>` · `zone  : clients=… bad=… broken=… closed=…` / `churn : count=… failed=…` 요약 줄. 한글 판정 줄(`판정  : ○ …`)은 사람용 | lead 실측: 이 저장소의 하네스 회차는 전부 콘솔 65001 에서 돌았고 시스템 OEMCP/ACP 는 949 · `src/client` 에 `SetConsoleOutputCP` 0건 · `client.ps1:104` 는 `& $exe 2>&1` 그대로 — 949 콘솔에서 한글 매칭은 조용히 깨질 수 있다(T015 S1 의 `order : OK — N 개가` 매칭이 그 예 — 기록만) |
+| 7 | **회귀 편입** — `client.ps1` 에 S22·S23(`churn.ps1` PS/`-Cxx` · 마을 A 생존 중)·S24·S25(`zone.ps1` PS/`-Cxx` · 전 서버 정지 뒤 꼬리) → 35 → 39판정(제안) → **43**(7단계 test 렌즈가 S26 실패 경로 · S27 churn 모드 · S28/S29 usage 경계를 더함 — 구현 결과 절) | `zone.ps1` 은 `Start-Village` 로 모든 village 를 죽이므로(`harness_common.ps1:489`) 마을 A 가 살아 있는 동안엔 못 부르지만 꼬리에서는 무해. 정규 회귀 밖에 두면 다음 조각의 회귀를 아무도 못 잡는다(`docs/TESTING.md` 「건너뛰지 마라」) |
+| 8 | **`selftest` +4**(`bytes_equal n==0` · `zone_of` · `expect_count` · `feed` 분할) → 12 → 16 | `docs/TESTING.md` 「못 덮는 것」 T015 행이 다음 조각에서 추가하라고 지목. 판정 산식 결함은 정상 서버 앞에서 영구 초록이라 selftest 만이 죽인다 |
+| 9 | 구성 축: 서버 3구성 × 클라 Release · 클라 ASan 1회(`churn` 2건은 ASan 에서 래퍼가 스스로 거부 → SKIP 기록) | ADR-029 결정 9 연장 · `churn.ps1` ASan 거부(`churn.ps1:76-85`) |
+
+**근거 — 버린 대안**: `WSAPoll`(MS Learn 이 Windows 10 2004 이전 연결 실패 통지 결함을 자체 명시 · 기존 `recv_some` 정합성) · 동시 송수신 스레드(ADR-029 와 동일 사유 — 지금 손해 없음) · 실물 `session.exe` 로그인 N개(재접속 조각으로 이월 · 리스크 §3-2) · 새 래퍼 `zone_cxx.ps1`·`churn_cxx.ps1`(결정 5) · `client.ps1` 안에서 zone 재구현(사본 · M-009) · churn 「연속 3회」 자동화(미정 축 신설) · 949 콘솔 대응 `SetConsoleOutputCP`(§18-7 — 65001 콘솔에서 돌리면 벗어난다).
+
+**결과 / 트레이드오프**:
+- ✅ 서버 소스 0줄(목표 — 구현 결과 절에서 실측) · 이월 실측 3건의 선행 조건(다중 접속 클라) 성립 · 14종 중 3종 이식(`send`·`zone`·`churn`) · 판정 계약이 ASCII 로 고정
+- ⚠️ `zone.ps1`·`churn.ps1` 에 갈래가 하나 늘어 PS 갈래의 무회귀를 매번 실측해야 한다 · `client.ps1` 실행 시간 증가(8단계 실측) · `-Cxx` 갈래에선 churn 의 중간 서버 통계 줄이 사라진다(before/after 만)
+- ⚠️ zone churn 모드의 `alive` 는 클라가 볼 수 없어 「소켓 미절단」으로 대체 — PS 와 판정 의미가 미세하게 다르다
+
+**미검증 전제** (T016-plan.md §7): U1 집합 select→`recv_some(0)` 조합의 무블로킹 · U2 `zone.ps1 -Churn` 현행이 `kZoneMembersNtf` 로 `brokenStream` 을 올리지 않는가 · U3 vcxproj `FD_SETSIZE` 정의의 TU 도달(static_assert 게이트) · U4 ASCII 계약의 코드페이지 무관성 · U5 예약 10s 창 · U6 `churn -Count 300` 판정 안정성 · U7 꼬리에서 9000/9100 재사용 · U8 `Get-FrameStats`↔`feed` 경계 동치. **U1 이 깨지면 결정 1 재설계.**
+→ **전부 해소(실측)**: U1 Step 0 임시 selftest(빈 목록 즉시 0 · 무자극 200ms ≥180ms · 한쪽 ping 뒤 `select=1·ready={1}`·`recv_some(0)` kData·타 소켓 kTimeout <50ms) · **U2 틀림** — PS `-Churn 10` 이 `other-ids=112` 4건으로 ✕(→ A12) · U3 3구성 `static_assert` 통과 · U4 기계 계약 ASCII 화(949 콘솔 회차는 안 돌렸다 — TESTING 「못 덮는 것」) · U5 N=8 에서 만료 없음(N 상한 미실측) · U6 `client.ps1` S22/S23 이 Release 5회차·ASan 1회차 전부 ○(300회 churn 판정 안정) · U7 S24/S25/S27 스폰 성공 · U8 selftest `tally_feed_split` + 코드 정독.
+
+**구현 결과 — 실측 (2026-09-06 새벽 · T016 6~9단계)**:
+- **상한 실적**: 프로덕션 신규 **3/3**(`src/client/socket_set.h` 254줄 · `cmd_zone.cpp` 406줄 · `cmd_churn.cpp` 130줄) · 수정 **7/7**(`tcp_client.h` `native()` · `commands.h` · `main.cpp` · `selftest.cpp` +5 · `cmd_send.cpp` `ps_bool` 삭제 1곳 · `client.vcxproj` `FD_SETSIZE=1024`+등록 3 · `.filters`) · **서버 소스 0줄**(`git diff --stat` — `src/{app,net,core,db,ops,proto,world,session}`·`main.cpp`·`common.props`·서버 vcxproj 3·`.sln`·`harness_common.ps1`·`send.ps1`·`config/` 전부 빈 출력) · 하네스 수정 3(`zone.ps1` 은 `-Cxx` 블록 삽입뿐 · `churn.ps1` 은 `-Cxx` 블록 + `for` 헤더 1줄 · `client.ps1` S22~S29) · 하네스 신규 0.
+- **빌드**: 3구성 `OK … warnings=0 errors=0` 전 회차(FINAL 04:20) · `build\x64\{Debug,Release,ASan}\client.exe`.
+- **회귀**: `client.ps1`(Release) **43/43 · exit 0** — 구현자 2회(44.6s·37.8s) · lead FINAL(44s) · **ASan 43/43 · exit 0**(48s · S22/S23 SKIP · sanitizer 보고 0 · dumps 0) · `selftest` **17/17** · 사전 기동 마을 앞 `churn.ps1 -Count 1000 -Framed` PS ○(+106.5 B/session · handles +16) / `-Cxx` ○(client `count=1000 failed=0` · +16.4 B/session · handles 0) · 서버 `[POOL ] acquired=2000 failed=0 peak=1/4096` · `[CONN ] rejected=0` · `[NET  ] 0/0`. 나머지 PowerShell 12종은 서버 소스 무변경을 이유로 돌리지 않았다(`.sln` 무변경 — 자체 스폰 대표는 S24 가 겸한다).
+- **동치 실증**: `zone.ps1` PS 8/8·200/200 ○ ↔ `-Cxx` `zone  : clients=8 zones=4 expect=200 joined=8 bad=0 broken=0 closed=0` ○(S24/S25) · `churn.ps1` PS ○ ↔ `-Cxx` `count=300 failed=0` + 래퍼 ○(S22/S23). **의도된 비동치 3**: PS `-Churn` ✕ vs C++ ○(A12 — S27 · `other-ids` 0건) · churn 첫 회차 connect 실패 exit 3(PS 는 `failed++`) · zone 송신 실패 `closed` 표시(PS 는 예외 중단).
+- **뮤턴트**: **설계 13 · 주입 13 · 미주입 0 · 무효 회차 2 · 오염 회차 2**(전부 재실행으로 대체 · 전 회차 백업 바이트 일치 복원) — 기대 정확 일치 **11/13**: Z1 S0·S25·(+S27) · Z2 S0 · Z3 S25 · Z4 S0·S25 · Z5 S27·(+S25) · Z6 S0 · Z7 S28 · Z8 S29 · B S0 · C1 S26 · C2 S26 · HMUT-1 S22·S23 · HMUT-2 S25. 어긋난 둘은 `zone  :` ASCII 요약 리터럴(`expect=`/`broken=`)을 거친 추가 킬(사유 확인). 죽은 판정 {S0 S22 S23 S25 S26 S27 S28 S29} · 신규 8판정 중 **S24 만 의도된 생존**(PS 갈래 가드 — T015 S1b 동형) · selftest 신규 5항목 전부 판정자 있음. ⛔ 드라이버 교훈: `build.ps1` 은 경고 시 `OK` 대신 `!` 를 찍는다(판정은 `errors=0`) · 하네스 뮤턴트는 **원복 소스로 재빌드한 exe** 앞에서만(직전 뮤턴트 exe 잔존 → S26 오탐 실증).
+- **리뷰**: 5단계 3-페르소나 R1(HIGH 1 — `tally_feed_split` 24B 산술 · MED 1 · LOW 9) → R2(신규 MED 2) → R3 PASS ×3 · 7단계 Lane A + 3렌즈: test REVISE(HIGH 2 — S23 누수 판정 미검사 · 플랜 MUT-C2 주장 오류 / MED 2 — exit 2 경계 · `pump_once` 리매핑) → 반영(S23 강화 · S26~S29 · `remap_ready`+selftest · `send_or_mark`) → 재리뷰 test/correctness PASS · boundary PASS ⇒ **HIGH 장부 2/2 폐합 · 최종 PASS** · **Codex 전 단계 `CODEX_SKIP:not-authenticated`**. 상세는 HANDOFF §3-p.
+- **발견한 낡음(기록만 · 무수정)**: PS `zone.ps1 -Churn` 모드가 ADR-026 이전 known 집합으로 ✕ 를 낸다(다음 소정리 후보 — PS 갈래 무변경 게이트) · `client.ps1:170` S1 한글 매칭의 콘솔 65001 의존 · `harness_common.ps1:1,448,559` 「8종/9종」(T015 기록 — 448 이 맞음).
+
+---
+
 ## 템플릿
 
 ```markdown
