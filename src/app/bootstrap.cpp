@@ -24,8 +24,11 @@ namespace {
     // 스레드는 내가 만들어 넣는다. 블록되는 워커가 생기면 커널이 하나를 더 깨운다.
     constexpr int kIoWorkerCount = 4;
 
-    // 직렬 큐 워커 수(app::WorkerPool) — 옛 존 스레드 수를 대신한다. 8 은 안 쟀다 —
-    //   §6-2 예시값 그대로다. dbload·zone_block(재정의) 실측으로 확정할 몫이다.
+    // 직렬 큐 워커 수(app::WorkerPool) — 옛 존 스레드 수를 대신한다. 8 은 잰 값이다(ADR-028 ·
+    //   dbload 격자 2026-09-05): [db] pool_size >= 워커 수이면 워커 8/12/20 의 처리량이 서로 ±5% 안
+    //   (4 는 8 대비 -12~-18% · 병목은 클라·DB 왕복)이고, pool_size < 워커 수일 때만 kBusy 가 난다 — DB 를
+    //   빌리는 스레드가 워커뿐이라 동시 대여 수 <= 워커 수가 구조적이기 때문이다.
+    //   그래서 8 은 「정답」이 아니라 「더 늘려도 이 부하에선 안 보인다」의 값이다. 설정으로 바꾼다.
     constexpr int kAppWorkerCount = 8;
 
     constexpr unsigned short kPort = 9000;

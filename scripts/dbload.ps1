@@ -2,16 +2,24 @@
 #
 #   무엇을 재는가
 #     N개 연결이 「서로 다른 player_id」로 로그인해 인벤토리 조회를 한꺼번에 던진다.
-#     player_id 가 다르면 워커도 다르므로(player_id % 워커수), 그래야 연결이 여러 개 쓰인다.
-#     zone_block.ps1 은 player 1 하나만 쓴다 — 워커 하나만 돌아서 이 측정엔 안 맞는다.
+#     세션마다 직렬 큐가 따로 있고 그 실행권이 공용 큐를 오가며 워커에 유동
+#     배정된다(docs/ARCHITECTURE.md §3 — player_id 해시로 워커를 고정 배정하지
+#     않는다). 그래서 연결을 여러 개 써야(=세션을 여러 개 열어야) 여러 워커가
+#     동시에 DB 를 타는 상황을 만들 수 있다. zone_block.ps1 은 player 1 하나만
+#     쓴다 — 워커 하나만 돌아서 이 측정엔 안 맞는다.
 #
 #   판정은 「서버 종료 로그」에서 한다
 #     [POOL2] db conns peak=? / ?  acquired=?  open_failed=?  discarded=?  try_failed=?
 #       peak        동시에 실제로 쓰인 연결 수   ← 이게 「몇 개 필요한가」의 답
 #       try_failed  못 빌려서 즉시 포기한 횟수    ← 0 이 아니면 풀이 모자라다
 #
+#   동시성 형태 — 클라당 라운드 몫(perRound)을 응답을 기다리지 않고 한꺼번에
+#     쓰고 넘어간다(완전 파이프라이닝). 그래서 클라당 in-flight 상한은
+#     사실상 없다(라운드 안 요청 전부가 동시에 미응답 상태일 수 있다).
+#
 #   사용:
 #     .\dbload.ps1 -Clients 8 -Repeat 50
+#     .\dbload.ps1 -Clients 8 -Repeat 50 -AppWorkers 2 -PoolSize 1   # [app] workers x [db] pool_size 격자
 
 param(
     [int]$Port    = 9000,
@@ -19,12 +27,12 @@ param(
     [int]$Repeat  = 50,
     [int]$Timeout = 20000,
 
-    # 「자연스러운」 player_id 분포로 재기 위한 옵션.
+    # 「자연스러운」 player_id 분포로 재기 위한 옵션. 지금 구조(세션마다 직렬
+    #   큐 · 실행권이 공용 큐를 오가며 워커에 유동 배정 — player_id 해시
+    #   배정은 없다)에서는 워커 분산 자체를 이 옵션으로 만드는 게 아니라,
+    #   「같은 유저 집합을 재현 가능하게 뽑는다」가 목적이다.
     #
     #   기본(PlayerPool = 0)은 예전 그대로 player 1..Clients 를 쓴다 (회귀 호환).
-    #   그런데 그 조건으로는 편중을 못 잰다 —
-    #     Clients 가 워커수의 배수면 player_id % 워커수 가 정확히 균등해진다.
-    #     8명 / 4워커 = 워커당 정확히 2명. 그건 잰 게 아니라 「만든 균등」이다.
     #
     #   PlayerPool 을 주면 [PlayerBase, PlayerBase+PlayerPool) 에서 Clients 명을
     #   중복 없이 무작위로 뽑는다. 실제 운영에 가까운 조건이다 —
@@ -36,10 +44,10 @@ param(
     [int]$PlayerPool = 0,
     [int]$Seed       = 0,
 
-    # 서버의 db workers 값. 클라가 「예상 분포」를 미리 찍어 두면,
-    #   서버 종료 로그의 [SKEW ] 와 대조해서 계측 자체가 맞는지 확인할 수 있다.
-    #   (7차 교훈 — 「무엇이 깨지는가」를 먼저 정하고 도구를 만든다)
-    [int]$Workers = 4,
+    # [app] workers · [db] pool_size 격자 실측용 — 스크래치 config 를 스스로
+    #   패치한다. 0 이면 커밋본 server.ini 값 그대로(패치 안 함).
+    [int]$AppWorkers = 0,
+    [int]$PoolSize   = 0,
 
     # 쓰기 혼합 — 이 스크립트의 본편.
     #
@@ -100,6 +108,38 @@ function New-U32BE([int]$v) {
 # [int] 캐스팅 필수 (8차 함정)
 function Get-U16([byte[]]$d, [int]$o) { return ([int]$d[$o] -shl 8) -bor [int]$d[$o+1] }
 
+# zone_block.ps1:101-118 의 사본이다(find_copies.ps1 이 동기화를 지킨다) — 서버가
+#   쓰는 중인 로그를 FileShare.ReadWrite 로 열어야 공유 충돌 없이 읽는다.
+function Read-ServerLog([string]$LogPath) {
+    if (-not (Test-Path -LiteralPath $LogPath)) { return '' }
+    $fs = [System.IO.File]::Open($LogPath, [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $len = [int]$fs.Length
+        $buf = [byte[]]::new($len)
+        $got = 0
+        while ($got -lt $len) {
+            $n = $fs.Read($buf, $got, $len - $got)
+            if ($n -le 0) { break }
+            $got += $n
+        }
+        return [System.Text.Encoding]::UTF8.GetString($buf, 0, $got)
+    } finally {
+        $fs.Dispose()
+    }
+}
+
+# ⛔ ? 규칙(§4-5) — 종료를 못 시켰거나 줄을 못 찾으면 이 값은 $null 로 남기고
+#   호출부가 '?' 로 찍는다. 0 으로 찍지 않는다. Match.Success 를 먼저 보고
+#   실패면 $null 을 대입한다 — Groups[1].Value 를 확인 없이 [int] 캐스팅하면
+#   빈 문자열이 예외 없이 조용히 0 이 된다.
+function Get-LogInt([string]$Pattern, [string]$Text) {
+    $m = [regex]::Match($Text, $Pattern)
+    if ($m.Success) { return [int]$m.Groups[1].Value }
+    return $null
+}
+function Format-MaybeInt($v) { if ($null -eq $v) { '?' } else { $v } }
+
 # ── 접속할 player_id 를 먼저 정한다 ──────────────────────────────────
 if ($PlayerPool -gt 0) {
     if ($PlayerPool -lt $Clients) {
@@ -111,24 +151,23 @@ if ($PlayerPool -gt 0) {
 }
 else {
     $ids  = @(1..$Clients)
-    $desc = "player 1..$Clients (연속 — 배수면 인위적 균등이니 편중 측정엔 부적합)"
+    $desc = "player 1..$Clients (연속 — 회귀 호환용 기본값. 실제 접속 분포와는 다르다)"
 }
-
-# 클라가 「예상 분포」를 먼저 찍는다. 서버 [SKEW ] 와 이 값이 어긋나면
-#   계측이 아니라 라우팅이 깨진 것이다 — 두 숫자가 서로를 검산한다.
-$expect = @{}
-foreach ($w in 0..($Workers - 1)) { $expect[$w] = 0 }
-foreach ($id in $ids) { $expect[[int]($id % $Workers)] += $Repeat }
-$emax = ($expect.Values | Measure-Object -Maximum).Maximum
-$eavg = ($expect.Values | Measure-Object -Average).Average
-$eskew = if ($eavg -gt 0) { [math]::Round($emax / $eavg, 2) } else { 0 }
-$edist = (0..($Workers - 1) | ForEach-Object { "w$_=$($expect[$_])" }) -join ' '
 
 $scratchRoot = Join-Path $env:TEMP ("dbload_harness_" + [guid]::NewGuid().ToString('N'))
 $listener = $null
 $villageProc = $null
+$vhome = $null
 try {
 $vhome = New-HarnessHome $scratchRoot ([string]$Port)
+# [app] workers · [db] pool_size 격자 실측 — New-HarnessHome 의 반환값은
+#   스크래치 루트 문자열 하나다(harness_common.ps1:473 `return $ScratchRoot`).
+#   ini 경로는 여기서 직접 조립한다.
+if ($AppWorkers -ne 0 -or $PoolSize -ne 0) {
+    $scratchIni = Join-Path $vhome 'config\server.ini'
+    if ($AppWorkers -ne 0) { Set-IniKeyInSection $scratchIni 'app' 'workers' $AppWorkers }
+    if ($PoolSize   -ne 0) { Set-IniKeyInSection $scratchIni 'db'  'pool_size' $PoolSize }
+}
 $listener = Start-FakeSession 9100
 $villageProc = Start-Village $Config $vhome $Seconds
 $link = Accept-FakeSessionLink $listener
@@ -137,12 +176,12 @@ $link = Accept-FakeSessionLink $listener
 #    QPS 측정에 안 섞인다. ──────────────────────────────────────────
 $conns = @()
 foreach ($id in $ids) {
-    # player_id 를 전부 다르게 준다 — 그래야 워커가 갈린다
+    # player_id 를 전부 다르게 준다 — 세션마다 직렬 큐가 따로라 연결을
+    #   나눠야 여러 워커가 동시에 DB 를 탄다(player_id 해시 배정은 없다)
     $reserved = Connect-Reserved $link $Port ([uint64]$id) $Timeout
     $conns += @{ Client = $reserved.Client; Stream = $reserved.Stream; Player = $id }
 }
 Write-Host "connect : $Clients 개 — $desc"
-Write-Host "expect  : $edist   max/avg = $eskew   (서버 [SKEW ] 와 대조할 것)"
 
 # ── 거래 쌍 접속 (쓰기 부하) ─────────────────────────────────────────
 #   읽기 클라와 player_id 가 겹치면 안 된다. 겹치면 같은 플레이어의 조회와 거래가
@@ -252,8 +291,12 @@ for ($r = 0; $r -lt $rounds; $r++) {
 }
 
 # ── 응답을 전부 받을 때까지 ──────────────────────────────────────────
+#   kInventoryAck 의 body 첫 바이트가 result 코드다(packet.h:107 —
+#   kInventoryAck = 104 // body: [result:u8][count:u16]… · 값은 packet.h:195-201
+#   enum class ResultCode — kOk=0 · kBusy=4). ok/busy/other 로 나눠 센다.
+#   qps 는 ok 기준이다.
 $want  = $Clients * $sent
-$total = 0
+$ok = 0; $busy = 0; $other = 0; $total = 0
 $buf   = [byte[]]::new(65536)
 $deadline = [datetime]::UtcNow.AddMilliseconds($Timeout)
 
@@ -271,18 +314,24 @@ while ($total -lt $want -and [datetime]::UtcNow -lt $deadline) {
     }
     if (-not $any) { Start-Sleep -Milliseconds 5 }
 
-    # 프레임 세기
-    $total = 0
+    # 프레임 세기 — ok/busy/other 분리
+    $ok = 0; $busy = 0; $other = 0
     foreach ($c in $conns) {
         $d = $pending[$c.Player].ToArray()
         $off = 0
         while ($off + 4 -le $d.Length) {
             $len = Get-U16 $d $off
             if ($off + 4 + $len -gt $d.Length) { break }
-            if ((Get-U16 $d ($off + 2)) -eq $MSG_INV_ACK) { $total++ }
+            if ((Get-U16 $d ($off + 2)) -eq $MSG_INV_ACK) {
+                $result = [int]$d[$off + 4]
+                if ($result -eq 0) { $ok++ }
+                elseif ($result -eq 4) { $busy++ }
+                else { $other++ }
+            }
             $off += 4 + $len
         }
     }
+    $total = $ok + $busy + $other
 }
 $sw.Stop()
 
@@ -292,20 +341,64 @@ foreach ($p in $traderPairs) {
 }
 
 $ms  = [math]::Round($sw.Elapsed.TotalMilliseconds, 1)
-$qps = if ($ms -gt 0) { [math]::Round($total / ($ms / 1000.0), 0) } else { 0 }
+$qps = if ($ms -gt 0) { [math]::Round($ok / ($ms / 1000.0), 0) } else { 0 }
 
 Write-Host "sent    : $want 건  ($Clients 클라 x $sent)"
-Write-Host "recv    : $total 건"
+Write-Host "recv    : $total 건  (ok=$ok busy=$busy other=$other)"
 if ($Traders -gt 0) {
     Write-Host "trades  : $($Traders * $TradeRepeat) 건 시도  ($Traders 쌍 x $TradeRepeat 회)"
 }
-Write-Host "time    : $ms ms   ($qps 건/초)"
+Write-Host "time    : $ms ms   ($qps 건/초 · ok 기준)"
 Write-Host ""
 if ($total -lt $want) {
     Write-Host "판정  : X 응답이 모자란다 — 타임아웃이거나 DB 오류. 서버 로그를 볼 것"
 } else {
-    Write-Host "판정  : O 전부 응답. 서버 종료 로그의 [SKEW ] db queue wait 를 볼 것"
+    Write-Host "판정  : O 전부 응답 (ok=$ok busy=$busy other=$other)"
+    if ($busy -gt 0) {
+        Write-Host "        busy>0 — 풀이 모자랐다는 뜻이다(결함이 아니라 측정 결과)"
+    }
 }
+
+# ── 정상 종료 → 서버 종료 로그에서 [POOL2]·[WORK ]·[NET  ] 파싱 ─────────────
+#   zone_block.ps1:314-333 과 같은 방식(stdin 개행 → WaitForExit) — 그래야
+#   [POOL2] 등 종료 지표가 찍힌다. Stop-Harness 가 finally 에서 다시 한 번
+#   정상 종료를 시도하지만 이미 exited 라 안전하다(무해한 재확인).
+if ($villageProc -and -not $villageProc.HasExited) {
+    try {
+        $villageProc.HarnessStdin.WriteLine('')
+        $villageProc.HarnessStdin.Flush()
+        $villageProc.HarnessStdin.Close()
+        $villageProc.WaitForExit(5000) | Out-Null
+    } catch {}
+}
+Start-Sleep -Milliseconds 300
+$finalLog = Read-ServerLog (Join-Path $vhome 'logs\server.log')
+
+$poolPeak  = Get-LogInt '\[POOL2\] db conns peak=(\d+)' $finalLog
+$tryFailed = Get-LogInt '\[POOL2\][^\r\n]*try_failed=(\d+)' $finalLog
+$capHits   = Get-LogInt '\[WORK \][^\r\n]*cap_hits=(\d+)' $finalLog
+$resubmits = Get-LogInt '\[WORK \][^\r\n]*resubmits=(\d+)' $finalLog
+$kicked    = Get-LogInt '\[NET  \][^\r\n]*send_full_kicked=(\d+)' $finalLog
+$wActual   = Get-LogInt '\[INFO\] config:[^\r\n]*\bworkers=(\d+)' $finalLog
+
+foreach ($miss in @(
+    @{ N = 'poolPeak';  V = $poolPeak;  L = '[POOL2] peak' }
+    @{ N = 'tryFailed'; V = $tryFailed; L = '[POOL2] try_failed' }
+    @{ N = 'capHits';   V = $capHits;   L = '[WORK ] cap_hits' }
+    @{ N = 'resubmits'; V = $resubmits; L = '[WORK ] resubmits' }
+    @{ N = 'kicked';    V = $kicked;    L = '[NET  ] send_full_kicked' }
+)) {
+    if ($null -eq $miss.V) {
+        Write-Host "미확인  : $($miss.L) — 종료 로그에서 못 찾음" -ForegroundColor Yellow
+    }
+}
+
+$wReport = if ($AppWorkers -ne 0) { $AppWorkers } elseif ($null -ne $wActual) { $wActual } else { 'ini' }
+$pReport = if ($PoolSize -ne 0) { $PoolSize } else { 'ini' }
+
+Write-Host ("RESULT workers={0} pool={1} clients={2} repeat={3} traders={4} ok={5} busy={6} other={7} ms={8} qps={9} pool2_peak={10} try_failed={11} cap_hits={12} resubmits={13} kicked={14}" -f `
+    $wReport, $pReport, $Clients, $Repeat, $Traders, $ok, $busy, $other, $ms, $qps, `
+    (Format-MaybeInt $poolPeak), (Format-MaybeInt $tryFailed), (Format-MaybeInt $capHits), (Format-MaybeInt $resubmits), (Format-MaybeInt $kicked))
 } finally {
     Stop-Harness $scratchRoot $listener $villageProc
 }

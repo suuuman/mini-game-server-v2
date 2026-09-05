@@ -1150,7 +1150,7 @@ ADR-003(io_count 참조 계수)은 **존속** — 락 밖 포인터 홀드(§7-2
 
 **상한 실적** — 신규 **4/4**(worker_pool.{h,cpp}·lock_rank.h·trade.h) · 삭제 **4/4**(placement.h·zone.h·zone_manager.{h,cpp}) · 수정 **17**(승인 14 + 구현 중 정정 3: bootstrap.h 선언 쌍·session_router.cpp 공유 타입 파급·crash_dump.cpp 주석 — 견적 누락, ADR-015 「상한 19→20 정정」과 같은 형태) · 하네스 수정 8(재편 2 전면 + 주석 정정 5 + harness_common — 견적 ~6 에서 리뷰 반영으로 증가).
 
-**미검증 전제 폐합** — U1 스파이크 PASS(MS Learn P0718R2=VS2019 16.7 · 전방 선언 3-TU 경고 0 · ASan 경합 100만 회 리포트 0 · is_lock_free=0 은 무방) · U2 실측 확정(send -Seq 3000 순서 OK — ⭐ **구현 중 버그 A(플래그 해제를 팝 직후에 둔 레이스)를 이 판정이 실제로 잡았다**: 3회 전부 어긋남 검출 → 해제를 배치 실행 후로 옮겨 폐합) · U3 참고 실측(mutex vs shared_mutex 0.93~1.01x — D2 지지) · U4·U5 기본값(워커 8·풀 4)으로 13종 무회귀(정밀 튜닝은 A7 후속) · U6 8단계 이상 무.
+**미검증 전제 폐합** — U1 스파이크 PASS(MS Learn P0718R2=VS2019 16.7 · 전방 선언 3-TU 경고 0 · ASan 경합 100만 회 리포트 0 · is_lock_free=0 은 무방) · U2 실측 확정(send -Seq 3000 순서 OK — ⭐ **구현 중 버그 A(플래그 해제를 팝 직후에 둔 레이스)를 이 판정이 실제로 잡았다**: 3회 전부 어긋남 검출 → 해제를 배치 실행 후로 옮겨 폐합) · U3 참고 실측(mutex vs shared_mutex 0.93~1.01x — D2 지지) · U4·U5 기본값(워커 8·풀 4)으로 13종 무회귀(정밀 튜닝은 A7 후속 → ✅ **ADR-028 에서 실측, 값 무변경**) · U6 8단계 이상 무.
 
 **검증 실적** — 빌드 3구성 w0 · **13종 전건 1회차**(send 3000 · churn ×3 **0/0/0B** · zone 8/8 · members 11 · inventory 3/3 · zone_block 신판정 3종(try_failed=118) · trade 25/25(SKIP 0) · zone_race 재목적 2판정(6000/6000·검사기 무발화) · gate 11 · drain 18 · idle 9 · s2s 28+SKIP1 · session 88(SKIP 0)) · ASan 5종(zone·members·trade·s2s·session) 리포트 0 · 종료 지표 직전 기준선 일치([POOL ] acquired=6000·[CONN ] peak=2 정확 일치).
 
@@ -1299,6 +1299,59 @@ reason 변조(MUT9 — 리뷰 반영으로 넣은 R1 reason=0 단언의 증명)�
 **미검증 전제 판정** — H-1 **성립 실측**(6a K11 절대값 그대로 — 기대값 정정 불필요) · H-2 정황 수용
 유지(측정 안 함 — §18-7) · H-3 참고 관찰만(`s2s_connector.cpp:774` `was_connected` 게이트 — 정독 아님,
 단정 안 씀) · H-4 소멸(`Accept-FakeSessionLink` 재사용 대신 drain.ps1 내 Register 응대 — 무확인 폐기 0).
+
+---
+
+## ADR-028 — A7(워커 N · DB 풀 크기)과 kSerialDrainBatch 를 실측하고 세 값을 유지한다
+
+**상태**: 확정 (2026-09-05 · T014 light-dev)
+
+**맥락**: `[app] workers`(8)·`[db] pool_size`(4)·`kSerialDrainBatch`(16)가 「안 쟀다」로 남아 있었다(DESIGN §14 A7 · `config/server.ini` · ARCHITECTURE §3 · `bootstrap.cpp`·`worker_pool.h` 주석). ADR-025 가 「정밀 튜닝은 A7 후속」으로 미뤘고, 직전 감사에서 **실측해 놓고 표시를 안 지운 사고**(ADR-023 → ADR-021 결정 13)가 실제로 발견돼 이번엔 「표시 제거」를 완료 조건에 넣었다(P5).
+
+**결정**:
+1. `[app] workers = 8` · `[db] pool_size = 4` **무변경**. 대신 규칙 하나를 명문화한다 — **`pool_size ≤ workers`**. DB 를 빌리는 지점이 워커 스레드의 둘(`frame_router.cpp:921` 거래 확인 · `:1086` 인벤토리)뿐이라 동시 대여 수 ≤ 워커 수가 구조적이고, 초과분은 쓰이지 않는다(`[POOL2] peak` 이 workers 에서 멈춘다 — 격자 실측).
+2. `kSerialDrainBatch = 16` **무변경**.
+3. 관측 장치 신설: `[WORK ] drains jobs cap_hits resubmits batch workers`(`worker_pool.cpp` `stop()` — 스케줄링 5블록 무접촉, 카운터·로그만) · `dbload.ps1 -AppWorkers/-PoolSize` + ok/busy 분리 + `RESULT` 한 줄 · `drain_batch.ps1` 신설(상수 패치·빌드·원복 내장, 유효성 3종).
+
+**근거** — 측정 조건: i7-12700F(12C/20T) · 63.8GB · Windows 11 · MySQL 8.4 로컬 · `village.exe` Release · PowerShell 5.1 하네스(단일 스레드) loopback · 부하 시드 player 1000..1255 × 2행 · 2026-09-05 12:04~12:22. 원본 RESULT 전건은 `.claude/ai-archive/TASKS/T014-measure-log.md`(추적 밖).
+
+A. **workers × pool 격자** — `dbload.ps1` 32클라 × 50건 파이프라인 버스트(1600건) · 조합당 3회 중앙값(발췌):
+
+| workers | pool | busy% | ok/s | peak | cap_hits |
+|---|---|---|---|---|---|
+| 4 | 4 | 0% | 9.3k | 4 | 94 |
+| 8 | 4 | **47%** | 5.8k | 4 | 56 |
+| 8 | 8 | 0% | 11.3k | 7·8 | 69 |
+| 12 | 8 | 1% | 11.2k | 8 | 68 |
+| 20 | 16 | 0% | 10.4k | 7·8·9 | 66 |
+
+- kBusy 는 **`pool < workers` 에서만** 난다(w4·p4 0% · w8·p4 47% · w8·p8 0%). `pool ≥ workers` 면 워커 8/12/20 의 처리량이 서로 ±5% 안(4 는 8 대비 −12~−18%) — 1600건이 120~180ms 에 끝나 병목은 워커가 아니라 클라·DB 왕복이다.
+- 기본 8/4 의 비용: 이 버스트에서 요청 절반이 kBusy(클라 재시도 몫). 8/8 이면 busy 0 · ok +94%.
+
+C. **격리 효익** — `drain_batch.ps1` 워커 8 · 플러더 10 × 200건 · K=16 · 3회 중앙값: pool 4 → Echo 프로브 p99 **1.27ms**/busy 84% · pool 8 → **2.60ms**/busy 0 · pool 16 → 3.62ms/busy 0. 무관 트래픽의 꼬리를 1.3ms 안에 두는 값이 8/4 의 효익이고, 로컬 DB(0.15~0.5ms/건)라 작게 보인다.
+
+⇒ 8/4 를 유지하는 이유: §6-2 격리는 **DB 가 느릴 때**를 위한 손잡이인데, 이 환경은 DB 가 빨라 효익이 작게 나올 뿐 손잡이가 무의미하다는 증거가 아니다. 효익이 작다고 풀을 워커와 같게 두면 DB 지연 시 워커 전부가 갇힌다. 값을 바꾸는 판단은 실제 DB 지연·재시도율 데이터가 생겼을 때 한다. ⚠️ **이 결정은 「측정이 정답을 냈다」가 아니라 「비용·효익을 수치로 알고 정책을 유지한다」이다.**
+
+B. **kSerialDrainBatch** — `drain_batch.ps1` K ∈ {1,4,16,64} · 2회 중앙값 · 전건 `valid=1`(cap_hits>0 · kicked=0 · lost=0):
+
+| K | 격리(w1·f1) 프로브 p99 | 격리 플러드 완료 | 격리 resubmits | 현실(w8·f10) 프로브 p99 |
+|---|---|---|---|---|
+| 1 | 1.15ms | 42ms | 205 | 0.74ms |
+| 4 | 1.79ms | 58ms | 49 | 0.34ms |
+| **16** | **2.60ms** | 40ms | 12 | 0.51ms |
+| 64 | 3.85ms | 34ms | 3 | 5.26ms(9.88 / 0.63) |
+
+- 격리 구성에서 p99 가 K 에 **단조 증가** — 「대기 상한 = K × 단위 작업(~0.15ms)」 그대로다(K=16 예측 2.4 vs 실측 2.6). 플러드 완료 시간의 K 간 차이는 같은 K 의 회차 편차(≥40%) 안이라 **처리량 비용은 이 클라로는 못 가른다** — 확실히 주는 것은 재제출뿐이다.
+- 현실 구성(워커 8)에서는 빈 워커가 받아 상한이 거의 안 걸린다(p99 0.3~0.7ms). K=64 만 꼬리가 불안정하다.
+- ⇒ 16 유지. K=4 는 격리 p99 −0.8ms 에 재제출 4배, K=64 는 +1.2ms 와 불안정한 꼬리. 배치 **방식** 변경은 이 ADR 범위 밖(직렬 큐 스케줄링 — hard-dev).
+
+**결과 / 트레이드오프**:
+- ✅ 세 지점의 「안 쟀다」가 조건 붙은 실측값으로 교체됐다(DESIGN §14 A7·§7-8 · ARCHITECTURE §3 · `server.ini` 3곳 · `bootstrap.cpp`·`worker_pool.h` 주석 · ADR-025 문장 · TESTING 측정용 표·§3). 관측 장치 3종이 남는다.
+- ⚠️ `dbload.ps1 -Traders` 의 `ms` 는 거래 ACK 대기(연결당 최대 3s)가 섞여 처리량 지표가 아니다 — 같은 조건 3회에서 26배 편차(9540/3360/366ms) 실측. 쓰기 혼합 처리량은 이 ADR 이 말하지 않는다.
+- ⚠️ 클라가 PowerShell 단일 스레드라 워커 9~11개 이상을 동시에 먹이지 못했다(`peak` 상한). 워커 20 의 상한은 이 클라로는 못 본다.
+- ⚠️ `drain_batch -Batch K` 는 소스와 exe 를 바꾸는 하네스다 — `-Restore` 를 잊으면 소스 16 · exe K 로 갈린다(TESTING 측정용 절에 확인 명령).
+
+**미검증 전제**: ① 느린 DB(수십 ms/건) 조건의 격리 효익 — 안 쟀다. ② in-flight 1 인 실제 클라 분포에서의 busy 율 — 안 쟀다(파이프라인 버스트만). ③ L1 경합(DESIGN §7-8 위험 1) — A7 축이 아니라 이월(문구 정정). ④ `[io] worker_threads`(4) — 범위 밖, 여전히 안 쟀다. ⑤ K 의 처리량 비용 — 회차 잡음 아래라 판정 불가.
 
 ---
 
