@@ -95,8 +95,8 @@ bool handle_foo(net::IocpServer& server, db::DbPool& db_pool, net::Session& sess
 
 ## D. 새 소스 파일 추가하기
 
-1. `src/<layer>/` 에 만든다. **의존 방향**: `world → proto → net → core`, `db → core`, `ops → core`, **`session → proto → net → core`(db 불링크 — ADR-020 결정 7)**, `app` 만 전부를 안다. 역방향 include 금지. ⭐ 정본은 `docs/CODING_RULES.md` §0 이다.
-2. 그 파일이 속한 프로젝트(`src/{core,net,db,ops,bench,proto}` → `server\common.vcxproj` · `src/{app,world}`와 `src/main.cpp` → `server\village.vcxproj`)의 `<ItemGroup>` 에 `<ClCompile Include="..\src\...\x.cpp" />` / `<ClInclude Include="..\src\...\x.h" />` 추가 (와일드카드 없음).
+1. `src/<layer>/` 에 만든다. **의존 방향**: `world → proto → net → core`, `db → core`, `ops → core`, **`session → proto → net → core`(db 불링크 — ADR-020 결정 7)**, **`client → proto`(헤더 전용 `packet.h` 만 — `common.lib` 도 불링크, ADR-029 결정 2)**, `app` 만 전부를 안다. 역방향 include 금지. ⭐ 정본은 `docs/CODING_RULES.md` §0 이다.
+2. 그 파일이 속한 프로젝트(`src/{core,net,db,ops,bench,proto}` → `server\common.vcxproj` · `src/{app,world}`와 `src/main.cpp` → `server\village.vcxproj` · `src/session/` → `server\session.vcxproj` · `src/client/` → `server\client.vcxproj`)의 `<ItemGroup>` 에 `<ClCompile Include="..\src\...\x.cpp" />` / `<ClInclude Include="..\src\...\x.h" />` 추가 (와일드카드 없음).
 3. 같은 프로젝트의 `.filters` 에 같은 항목 + `<Filter>` 지정.
 4. `scripts\build.ps1` 로 세 구성 빌드 — **경고 0** 이 기준선이다 (`/W4`).
 

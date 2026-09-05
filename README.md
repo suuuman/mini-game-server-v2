@@ -11,7 +11,7 @@ Windows · C++20 · IOCP 기반 게임 서버를 **세션 서버 + 마을 서버
 | 설계 | **`docs/DESIGN-server-split.md`** — 18개 절. **왜 이 구조인가**는 여기 있다 |
 | 구조 | `docs/ARCHITECTURE.md` — 계층 · 불변식 10개 |
 | 결정 기록 | `docs/DECISIONS.md` — ADR. 되돌리기 전에 여기서 이유를 확인한다 |
-| 검증 절차 | `docs/TESTING.md` — 회귀 하네스 14종 · 부하 주입 스위치 · 판정 지표 |
+| 검증 절차 | `docs/TESTING.md` — 회귀 하네스 15종 · 부하 주입 스위치 · 판정 지표 |
 | 코드 규약 | `docs/CODING_RULES.md` — 주석 문화 · 명명 · 자원 수명 · 짝 API |
 
 ---
@@ -90,10 +90,12 @@ src/
   db/     db_conn · db_pool · db_worker    커넥션 풀(try_acquire) · DbPool 소유(전용 워커 스레드 없음)
   ops/    crash_dump                       크래시 덤프
   bench/  bench                            내장 측정 하네스
+  client/ main · args · frame_codec · tcp_client · cmd_send · cmd_flow · selftest   검증용 C++ 클라이언트(client.exe) — proto/ 만 include
 ```
 
 **의존 방향은 한쪽입니다** — `world → proto → net → core` · `db → core` · `ops → core` ·
-`session → proto → net → core`(세션 서버는 **DB 계층을 링크하지 않습니다** — 레지스트리·예약·접속 테이블이 전부 프로세스 메모리라서입니다).
+`session → proto → net → core`(세션 서버는 **DB 계층을 링크하지 않습니다** — 레지스트리·예약·접속 테이블이 전부 프로세스 메모리라서입니다) ·
+`client → proto`(클라이언트는 `common.lib` 도 링크하지 않고 헤더 전용 `packet.h` 만 include 합니다 — ADR-029).
 역방향 include 는 금지이고, `#include` 그래프를 훑어 위반을 잡는 검사기를 따로 두고 돌렸습니다.
 `app/` 만 전부를 압니다.
 
@@ -149,7 +151,7 @@ S2S(마을 ↔ 세션)는 헤더에 `seq:u32` 가 붙은 별도 8B 프레이밍�
 |---|---|
 | 툴셋 | v145 (Visual Studio 2026) · C++20 · 경고 수준 4 |
 | 의존 | MySQL 8.4 (`libmysql.lib` · `libmysql.dll`) |
-| 출력 | `build\x64\{Debug,Release,ASan}\village.exe` · `session.exe` |
+| 출력 | `build\x64\{Debug,Release,ASan}\village.exe` · `session.exe` · `client.exe`(검증용 클라이언트) |
 
 MySQL 경로는 `.vcxproj` 의 `MySqlDir` 하나로 관리합니다.
 
@@ -179,7 +181,7 @@ DB 가 죽어 있어도 서버는 뜹니다 — 인벤토리·거래만 실패�
 
 ## 동작 확인
 
-`scripts\` 하네스 **14종**은 각각 **하나의 성질**을 검증합니다.
+`scripts\` 하네스 **15종**은 각각 **하나의 성질**을 검증합니다.
 ⛔ **묶음이 두 갈래고, 둘 다 포트 9000 을 쓰므로 순서가 강제됩니다.**
 
 **① 서버를 미리 띄우고** 다른 창에서 두 종:
@@ -190,7 +192,7 @@ DB 가 죽어 있어도 서버는 뜹니다 — 인벤토리·거래만 실패�
 .\scripts\churn.ps1 -Count 1000 -Framed                      # 접속·종료 반복 · 누수
 ```
 
-**② 서버를 내린 뒤** 나머지 열두 종 — 각자 서버를 스스로 스폰합니다:
+**② 서버를 내린 뒤** 나머지 열세 종 — 각자 서버를 스스로 스폰합니다:
 
 ```powershell
 .\scripts\zone.ps1       -Clients 8 -Zones 4 -Chats 100      # 존 경계 브로드캐스트
@@ -205,11 +207,21 @@ DB 가 죽어 있어도 서버는 뜹니다 — 인벤토리·거래만 실패�
 .\scripts\chat.ps1                                           # 채팅 3종 48판정
 ```
 
-**③ 아래 둘은 단독 실행입니다** — 다른 종과 창을 공유하지 않습니다:
+**③ 아래 셋은 단독 실행입니다** — 다른 종과 창을 공유하지 않습니다:
 
 ```powershell
 .\scripts\s2s.ps1       # S2S 커넥터 29항목 (28 통과 + SKIP 1) — 가짜 세션 서버 역할을 스스로 한다
 .\scripts\session.ps1   # 세션 서버 통합 95항목 — session.exe·village.exe 를 둘 다 스폰한다
+.\scripts\client.ps1    # C++ 클라이언트(client.exe) 회귀 35판정 — session.exe·village.exe(마을 A·B) 를 스폰한다 · 9000/9100/9200/9010
+```
+
+`client.exe` 는 손으로도 돌릴 수 있습니다 — 종료 코드가 판정입니다(0 PASS · 1 판정 FAIL · 2 인자 오류 · 3 접속 실패, 마지막 줄 `RESULT: PASS|FAIL <사유>`):
+
+```powershell
+.\build\x64\Release\client.exe selftest                                                  # 프레임 코덱 순수 함수 12항목 — 서버 불필요
+.\build\x64\Release\client.exe send --port 9000 --repeat 3000 --size 8 --framed --seq    # send.ps1 이식 — 서버를 먼저 띄운다
+.\build\x64\Release\client.exe send --port 9000 --repeat 1 --size 8 --framed --hold 7 --ping-ms 1000   # 주기 ping 으로 유휴 절단을 피한다(A15)
+.\build\x64\Release\client.exe flow --session-port 9200 --player 7001                    # 세션 로그인 → 배정 → Enter → Echo → Ping (session.exe·village.exe 둘 다 필요)
 ```
 
 ⚠️ `zone_race.ps1` 은 **`assert` 가 살아 있는 구성에서만 뜻이 있습니다** — `-Config Release` 를
@@ -245,7 +257,7 @@ DB 가 죽어 있어도 서버는 뜹니다 — 인벤토리·거래만 실패�
 | `docs/ARCHITECTURE.md` | 계층 · 경계 · **불변식 10개**. 코드를 고치기 전에 봅니다 |
 | `docs/DECISIONS.md` | ADR — 각 결정의 대안과 버린 이유. **되돌리고 싶을 때 먼저 봅니다** |
 | `docs/CODING_RULES.md` | 주석 문화 · 명명 · 오류 처리 · 자원 수명 · 짝 API 표 |
-| `docs/TESTING.md` | 하네스 14종의 판정 지표 · 부하 주입 스위치 · 실행 순서 |
+| `docs/TESTING.md` | 하네스 15종의 판정 지표 · 부하 주입 스위치 · 실행 순서 |
 | `docs/EXTENSION-GUIDE.md` | 기능을 더할 때의 유형별 체크리스트 |
 | `docs/DNF-GAP-ANALYSIS.md` | 상용 MMO 와의 격차 분석 · 로드맵 |
 

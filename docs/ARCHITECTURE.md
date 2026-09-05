@@ -187,7 +187,7 @@ db_pool.try_acquire()   →   실패 시 즉시 kBusy(재큐잉 없음)
 | ~~존 멤버 목록~~ | ✅ **채워졌다** — `kZoneMembersNtf`(112)가 멤버 `session_id` 목록을 내려준다 | 거래 상대 지목이 이것으로 성립한다(`packet.h` 의 그 주석이 이 메시지가 생긴 이유다). 4개 변동 지점이 전부 통지를 내는지는 `members.ps1` 11항목이 검증한다. ⚠️ 남은 한계는 「존에 있는 채로 로그인하면 `player_id` 가 낡는다」뿐이다(README 「알려진 한계」) |
 | 인벤토리 푸시 | 거래 성공 후 클라가 다시 조회해야 함 | `kTradeAck` 뒤 자동 `kInventoryAck` 푸시 가능 |
 | 존 인덱스 분리 | `EntryTable::zone_index_`가 L1 과 한 뮤텍스 | ✅ **6단계에서 재평가 완료(A11 폐합)** — 명부 스냅샷형 임계구역을 `std::mutex` vs `std::shared_mutex`로 실측(N=100/1,000/4,096), 최악 N 에서도 임계구역이 수백 μs 미만이고 `shared_mutex` 이득이 없어 **`std::mutex` 유지·인덱스 L1 안 유지로 확정**(근거·수치는 ADR-026) |
-| 단위 테스트 | 없음 | 순수 함수(`frame_size`, `world::Trade` 순수 메서드, 락 순서 정렬)는 테스트 가능 |
+| 단위 테스트 | **서버 쪽은 없음** — 클라 순수 함수만 `client selftest` 12항목(`src/client/frame_codec.h` 의 조립·분할·str16·순번 검사·판정 술어, T015 · ADR-029 결정 6) | 서버 순수 함수(`frame_size`, `world::Trade` 순수 메서드, 락 순서 정렬)는 여전히 테스트 가능하나 미착수 |
 | 비밀번호 평문 | `config/server.ini` | 환경변수 우선 읽기로 대체 가능 |
 
 ---
@@ -195,6 +195,6 @@ db_pool.try_acquire()   →   실패 시 즉시 kBusy(재큐잉 없음)
 ## 9. 빌드·검증 진입점
 
 - 빌드: `scripts\build.ps1` (Debug · Release · ASan, 경고 0 기준선)
-- 새 `.cpp`/`.h` 는 그 파일이 속한 프로젝트(`server\common.vcxproj` · `server\village.vcxproj` · `server\session.vcxproj`)의 `<ClCompile>`/`<ClInclude>` 항목에 **손으로 추가**해야 한다(와일드카드 아님). `.filters` 도 같이. `src/{core,net,db,ops,bench,proto}` → common · `src/{app,world}`와 `src/main.cpp` → village · `src/session/` → session. 빌드 플래그를 바꿀 때는 `server\common.props` 한 곳만 고친다. `.sln`의 `ProjectConfigurationPlatforms`는 프로젝트 x 3구성 x 2줄 — 빠지면 그 구성이 솔루션 빌드에서 조용히 빠진다.
-- 회귀: `send.ps1` → `zone.ps1` → `members.ps1` → `inventory.ps1` → `zone_block.ps1`(워커-풀 격리로 재정의) → `trade.ps1` → `zone_race.ps1`(락 검사기 assert 관찰로 재목적) → `churn.ps1` → `s2s.ps1` → `session.ps1`(뒤 둘은 서버를 스스로 스폰하는 단독 실행)
+- 새 `.cpp`/`.h` 는 그 파일이 속한 프로젝트(`server\common.vcxproj` · `server\village.vcxproj` · `server\session.vcxproj` · `server\client.vcxproj`)의 `<ClCompile>`/`<ClInclude>` 항목에 **손으로 추가**해야 한다(와일드카드 아님). `.filters` 도 같이. `src/{core,net,db,ops,bench,proto}` → common · `src/{app,world}`와 `src/main.cpp` → village · `src/session/` → session · `src/client/` → client(`common.lib` 불링크 — `proto/packet.h` 만 include). 빌드 플래그를 바꿀 때는 `server\common.props` 한 곳만 고친다. `.sln`의 `ProjectConfigurationPlatforms`는 프로젝트 x 3구성 x 2줄 — 빠지면 그 구성이 솔루션 빌드에서 조용히 빠진다.
+- 회귀: `send.ps1` → `zone.ps1` → `members.ps1` → `inventory.ps1` → `zone_block.ps1`(워커-풀 격리로 재정의) → `trade.ps1` → `zone_race.ps1`(락 검사기 assert 관찰로 재목적) → `churn.ps1` → `s2s.ps1` → `session.ps1` → `client.ps1`(뒤 셋은 서버를 스스로 스폰하는 단독 실행 — `client.ps1` 은 `client.exe` 35판정 · A15 주기 ping 실측)
 - 종료 로그 `[TICK ]` `[POOL ]`(직렬 큐 워커가 동기로 문 `try_acquire` 실패/성공 집계는 `[POOL2]`) `[CONN ]` `[NET  ]` `[ALLOC]` 가 판정 지표 — S2S 를 켠 실행은 `[S2S  ]`, 세션 서버는 `[SESS ]` 요약이 추가된다.

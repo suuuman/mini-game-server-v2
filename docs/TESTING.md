@@ -14,7 +14,7 @@
 |---|---|---|
 | `src/app/frame_router.cpp` | `kLogicDelayMs` · `kBadSyncDbMs` · `kBadTradeNoTx` | `0` · `0` · `false` |
 | `src/app/worker_pool.cpp` | `kBadTickWorkMs` · `kBadTickSpikeEvery` · `kBadTickSpikeMs` | `0` |
-| `config/server.ini` | `idle_timeout_sec` | **`90`**(의도값 — ADR-023. `0` 이 아니다) · 자체 스폰 10종(+`chat`)은 스크래치에서 `0` 고정 · `idle.ps1` 만 축소값 `2` |
+| `config/server.ini` | `idle_timeout_sec` | **`90`**(의도값 — ADR-023. `0` 이 아니다) · 자체 스폰 11종(+`chat`·`client`)은 스크래치에서 `0` 고정 · `idle.ps1` 과 `client.ps1` 의 마을 B 만 축소값 `2` |
 
 ⚠️ **정정 — 위치 이동 1건 · 소멸 1건.** `kBadTick*` 는 틱 스레드가 `zone_manager.cpp`
 (폐기됨)에서 `src/app/worker_pool.cpp` 로 옮겨 가면서 함께 옮겼다(`worker_pool.cpp:15-17` · `:301-307`
@@ -30,10 +30,12 @@ Step 4 에서 통째로 삭제돼 그 스위치가 걸릴 코드가 없다(§5 �
 잡는 하네스는 `zone_block.ps1`(재정의) — §5 표에서 다시 다룬다.
 
 > ⚠️ **위 항목은 「끄는 스위치」가 아니다** — `90` 이 커밋 의도값이고, 부하 주입 스위치 목록(위 세 줄)과는
-> 성격이 다르다. 자체 스폰 10종(`zone`·`members`·`inventory`·`zone_block`·`trade`·`zone_race`·`gate`·`drain`·`idle`·**`chat`**)은
+> 성격이 다르다. 자체 스폰 11종(`zone`·`members`·`inventory`·`zone_block`·`trade`·`zone_race`·`gate`·`drain`·`idle`·**`chat`**·**`client`**)은
 > `New-HarnessHome` 이 스크래치 config 사본에 `0` 을 강제로 덮어써 이 값의 영향을 안 받는다 —
 > ping 을 안 보내는 그 하네스들이 멀쩡한 세션을 유휴로 끊기는 문제는 그래서 발생하지 않는다.
 > `idle.ps1` 은 반대로 **자기 스크래치에 `2`(축소값)로 재오버라이드**해 유휴 킥 자체를 시험한다.
+> `client.ps1` 도 S4 전용 마을 B(9010)만 `2` 로 다시 덮는다 — 유일하게 ping 을 보내는 클라(`client send --hold --ping-ms`)가
+> 그 값 앞에서 살아남고, ping 없는 대조군이 끊기는 것을 함께 본다(A15 — S4a~c).
 > ⭐ **사전 기동 갈래(`send`·`churn`)는 커밋값 `90` 을 그대로 쓴다** — 실측:
 > `send 3000/3000`·`churn ×3` 무누수(핸들 델타 0·비누적) 확인. 이 갈래의 시나리오 최장 유휴는
 > 약 0.8초로 `90` 초에 비해 압도적으로 짧아(0.8s « 90s) 유휴 절단이 걸릴 여지가 없다.
@@ -80,7 +82,7 @@ Select-String -Path config/server.ini -Pattern "idle_timeout_sec"
 | 갈래 | 하네스 | 서버를 누가 띄우는가 |
 |---|---|---|
 | **A. 사전 기동** | `send` · `churn` | **사람이** 먼저 띄운다 — `.\build\x64\Release\village.exe --seconds 60` (**반드시 프로젝트 루트에서**) |
-| **B. 자체 스폰** | `zone` · `members` · `inventory` · `zone_block` · `trade` · `zone_race` · `gate` · `s2s` · `session` · `drain` · `idle` · **`chat`** | **스크립트가** 스스로 띄운다(스크래치 config 사본 + 가짜 세션 서버) |
+| **B. 자체 스폰** | `zone` · `members` · `inventory` · `zone_block` · `trade` · `zone_race` · `gate` · `s2s` · `session` · `drain` · `idle` · **`chat`** · **`client`** | **스크립트가** 스스로 띄운다(스크래치 config 사본 + 가짜 세션 서버 — `session`·`client` 는 실물 `session.exe`) |
 
 ⛔ **두 갈래가 같은 포트(클라 9000)를 쓴다.** 그래서 순서가 강제된다:
 
@@ -112,15 +114,21 @@ Select-String -Path config/server.ini -Pattern "idle_timeout_sec"
 | 12 | `.\scripts\drain.ps1` | **드레인 시나리오 19판정(D1~D10)** — 운영 명령(SetMode)으로 드레인 진입 시 `Reserve` 거절(D2)·`Enter` 는 `kBusy` 로 거절되되 연결은 유지(D3)·기존 접속 무영향(D4)·`DrainComplete` 발신 1회(D5)·재발신 없음(D6)·복귀 시 재입장 성공(D7)·거절된 예약은 저장 안 됨(D7b)·재-drain 시 플래그 리셋(D8)·종료 지표 5종(D9)·**링크 절단→재-accept→재등록 시 SetMode 재전송 없이 재발신 1회(D10 — 재연결 리셋 실증)**. ⚠️ 옛 「17판정」 표기는 D3 보강(+1 · 18)이 이 표에 전파되지 않은 채 남아 있던 것 — 실측 기준(18+D10=19)으로 정정했다 |
 | 13 | `.\scripts\idle.ps1` | **유휴 절단 시나리오 9판정(I1~I4)** — 무발신 소켓이 `idle_timeout_sec` 안에 끊기는가(I1)·주기 ping 소켓은 생존하는가(I2)·입장 세션도 idle kick 되고 같은 `player_id` 로 재입장 가능한가(I3, `entry.leave()` 수명 정리 실증)·종료 로그 `idle_kicked` 누적(I4) |
 | 14 | `.\scripts\chat.ps1` | **채팅 3종 48판정(C1~C11)** — 전체(All) 존 무관 전달(C1·C1b)·지역(Zone) 교차 미수신(C2)·귓속말(대상만 수신·자기 자신·부재 시 `kChatAck`)(C3~C5)·경계값 절단(미정의 type·빈 body·whisper target 잘림)(C6~C8)·텍스트 상한 초과(-9 재계산 경로)(C11)·**§17-6 큐 넘침 킥**(C1~C5 클라 격리 뒤 `send_full_kicked==1` 수치 단언 + 3/4 수위 `[WARN]`)(C9)·종료 지표 5종(C10) |
+| 15 | `.\scripts\client.ps1` | **C++ 클라이언트(`client.exe`) 회귀 35판정**(T015 · ADR-029 — S0 · S1 · S1b · S2×4 · S3a~f · S6 · S7 · S8~S21 · S5×3 · S4a~c) — `selftest` 순수 함수 12항목(S0) · `send` 이식(S1 순서 3000 · S1b **`send.ps1` 과 순서 판정 1종 동치** · S3b/S3e/S8/S9/S12/S16 판정 분기) · `flow`(S2 login/enter/echo/pong 정상 · S3a/S3c/S3d/S3f/S13/S14/S15/S17/S18/S19 부정 대조군) · usage/exit 2·3(S6/S7/S10/S11/S20/S21) · **A15 주기 ping**(S4a~c — `idle_timeout_sec=2` 마을 B 에서 ping 1s → 7s 생존 `pongs≥5` / ping 없음 → 절단 · `idle_kicked=1`) · 마을 A 종료 로그(S5 `[CONN ] rejected=0` · `[NET  ] idle_kicked=0` · `[ENTER]` 정확히 2). **종료 코드 = 실패 건수**(0 이면 35/35). ⛔ **단독 실행**(아래 절) · 서버 소스가 안 바뀐 클라 작업의 회귀는 이것 1종 + 자체 스폰 대표 1종(`zone.ps1`)으로 충분하다(서버 바이너리가 같은 소스에서 재빌드됐다는 전제 — T015 8단계 절차) |
 
-⚠️ **14종이다.** 한때 이 표에 `members.ps1` 이 빠져 7종이었고 다른 문서와 어긋나 있었다(정정).
+⚠️ **15종이다.** 한때 이 표에 `members.ps1` 이 빠져 7종이었고 다른 문서와 어긋나 있었다(정정).
 `s2s.ps1` 으로 9종, `session.ps1` 으로 10종, `gate.ps1` 으로 11종,
-`drain.ps1`·`idle.ps1` 로 13종, **`chat.ps1` 로 14종**이 됐다.
+`drain.ps1`·`idle.ps1` 로 13종, `chat.ps1` 로 14종, **`client.ps1` 로 15종**이 됐다.
 ⚠️ **번호는 추가 순서다. 「가벼운 것부터」 순서와 다르다** — 기존 번호를 재배치하면
 아래 「변경 유형별 최소 세트」의 참조가 조용히 어긋난다(실제로 겪었다).
 
 ⛔ **`session.ps1` 도 단독 실행이다** — `session.exe` 와 `village.exe` 를 **둘 다 스스로 스폰**한다(스크래치에 `config` 사본을 만들어 세션은 판정값을 축소하고, 마을은 `[s2s] host` 를 켠다). 위 1~8·11~14 중 자기 제외와 창을 공유하지 않는다.
 ⛔ 세션 수명(S2S 수용 연결의 영구 홀드)을 만지므로 **`session.ps1`·`s2s.ps1` 은 ASan 구성으로도 한 번씩** 돌려야 검증된 것으로 친다(ADR-020).
+
+⛔ **`client.ps1` 도 단독 실행이다** — `session.ps1` 과 같은 두 서버(세션 클라 9200 · S2S 수용 9100 · 마을 A 9000)에 더해
+S4 전용 마을 B 가 **9010**(`session.ps1` 내부 시나리오가 쓰는 포트)을 쓴다. 실행 전 `Get-Process village,session` 이 비어 있어야 한다.
+ASan 회차는 `.\scripts\client.ps1 -Config ASan`(서버 3종 + 클라 자체 메모리 — 별도 프로세스라 클라 ASan 이 서버 결함을 더 잡아 주지는 않는다, ADR-029 결정 9).
+세션 서버는 `config/session.ini` **미패치 사본**으로 스폰하고 `--seconds` 를 넘기지 않는다(넘기면 stdin 을 안 읽어 `Stop-Harness` 개행이 안 먹는다 — `src/session/main.cpp` 의 `auto_seconds` 갈래).
 
 ⛔ **`s2s.ps1` 은 다른 열셋과 실행 모양이 반대다** — 클라이언트를 흉내 내는 것이 아니라 **가짜 세션
 서버(TcpListener 9100)를 흉내 내고, village.exe 를 스스로 스폰**한다(스크래치에 `config` 사본을 만들어
@@ -131,8 +139,9 @@ Select-String -Path config/server.ini -Pattern "idle_timeout_sec"
 (ASan DLL PATH 처리가 스크립트 안에 복제돼 있다 — run-asan.ps1 과 동기화 주석 참조).
 
 ⛔ **ASan DLL PATH 처리는 이제 세 곳에 있다** — `run-asan.ps1` · `session.ps1` · **`harness_common.ps1`**
-(`Start-Village()`). 앞의 둘은 각자 골격이라 공용 함수로 묶이지 않고, 셋째는 자체 스폰 10종
-(`zone`·`members`·`inventory`·`zone_block`·`trade`·`zone_race`·`gate`·`drain`·`idle`·**`chat`**)이 공유한다.
+(`Start-Village()`). 앞의 둘은 각자 골격이라 공용 함수로 묶이지 않고, 셋째는 자체 스폰 11종
+(`zone`·`members`·`inventory`·`zone_block`·`trade`·`zone_race`·`gate`·`drain`·`idle`·**`chat`**·**`client`**)이 공유한다
+(`client.ps1` 은 `Start-Village` 가 `$env:PATH` 앞에 넣은 asan DLL 경로를 뒤에 뜨는 `session.exe`·`client.exe` 가 상속하는 데 기댄다).
 ⚠️ **리터럴이 같은 동안만 `find_copies.ps1` 이 동기화를 지킨다.** 글롭 경로를 고치면 세 곳을 함께 본다.
 ⛔ **한때 셋째가 없어 자체 스폰 종들이 `-Config ASan` 에서 전부 기동 실패했다** —
 증상은 「가짜 세션 서버에 village 의 S2S 연결이 오지 않았다」로만 보여 **원인과 멀다.**
@@ -217,11 +226,12 @@ ASan 은 `free` 한 메모리를 격리에 붙들어 둬서 **누수가 없어�
 
 ### 측정용 하네스 (회귀와 목적이 다르다)
 
-위 14종이 **「깨졌는가」**를 보는 것이라면, 아래는 **「얼마나 걸리는가」**를 잰다.
+위 15종이 **「깨졌는가」**를 보는 것이라면, 아래는 **「얼마나 걸리는가」**를 잰다.
 (⚠️ 이 문장은 표가 7종이던 시절의 「7종」이 **두 번의 하네스 추가(members · s2s)를 지나도록**
 낡은 채 남아 있었다 — 최종 리뷰가 잡았다. 표의 행 수를 바꾸면 이 문장도 함께 본다.
 ⚠️ `drain`·`idle` 로 11→13 으로 다시 늘었다 — 이 경고가 스스로 말한 그대로 함께 본다.
-⚠️ `chat` 으로 13→14 로 다시 늘었다 — 이 경고가 스스로 말한 그대로 함께 본다.)
+⚠️ `chat` 으로 13→14 로 다시 늘었다 — 이 경고가 스스로 말한 그대로 함께 본다.
+⚠️ `client` 로 14→15 로 다시 늘었다 — 이 경고가 스스로 말한 그대로 함께 본다.)
 회귀에는 안 넣고, 성능 판단이 필요할 때만 돌린다.
 
 | 명령 | 재는 것 | 판정 |
@@ -250,20 +260,21 @@ ASan 은 `free` 한 메모리를 격리에 붙들어 둬서 **누수가 없어�
 **● 필수 · ◐ 조건부(그 행의 조건 각주를 본다) · ✗ 그 구성에서 하네스가 스스로 거부**
 구성 표기 — `D` Debug 필수 · `R` Release · `A` ASan 의무 · `3` Debug·Release·ASan 세 구성
 
-| 변경한 것 | 1 send | 2 zone | 3 memb | 4 inv | 5 zblk | 6 trade | 7 race | 8 churn | 9 s2s | 10 sess | 11 gate | 12 drain | 13 idle | 14 chat |
-|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
-| 프로토콜 · 프레이밍 | ● | ● | | | | | | | | | | | | |
-| 락 · `EntryTable` · 직렬 큐 <sup>a</sup> | | ● | ● | | ◐ | ◐ | ●<sup>D</sup> | ◐<sup>DR</sup> | | ● | ● | | | ● |
-| 채팅 · 브로드캐스트 <sup>b</sup> | | ● | | | | | | | | | | | | ● |
-| DB · 트랜잭션 <sup>c</sup> | | | | ● | ● | ● | | | | | | | | |
-| 세션 수명(`acquire`/`release`) <sup>d</sup> | ●<sup>A</sup> | ●<sup>A</sup> | ●<sup>A</sup> | | | | | ●<sup>DR</sup>✗ | | | | | | |
-| 틱 · 시뮬레이션 <sup>e</sup> | | ● | | ● | | | | | | | | | | |
-| S2S 커넥터 · `s2s_link` · `s2s_packet` <sup>f</sup> | | | | | | | | | ●<sup>3</sup> | | | | | |
-| 세션 서버(`src/session/`) · 수용 경로 <sup>f</sup> | | | | | | | | | ●<sup>3</sup> | ●<sup>RA</sup> | | | | |
-| 예약 게이트 · 신원 확정 <sup>g</sup> | | | | | | ● | | | | ● | ● | | | |
-| 드레인 · 서비스 상태 | | | | | | | | | ● | ● | | ● | | |
-| idle · 유휴 정리 | | | | | | | | ●<sup>DR</sup> | | | | | ● | |
-| 동기 Kick <sup>h</sup> | | | | | | ● | | | ●<sup>A</sup> | ●<sup>A</sup> | ● | | | |
+| 변경한 것 | 1 send | 2 zone | 3 memb | 4 inv | 5 zblk | 6 trade | 7 race | 8 churn | 9 s2s | 10 sess | 11 gate | 12 drain | 13 idle | 14 chat | 15 client |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| 프로토콜 · 프레이밍 | ● | ● | | | | | | | | | | | | | ● |
+| 락 · `EntryTable` · 직렬 큐 <sup>a</sup> | | ● | ● | | ◐ | ◐ | ●<sup>D</sup> | ◐<sup>DR</sup> | | ● | ● | | | ● | |
+| 채팅 · 브로드캐스트 <sup>b</sup> | | ● | | | | | | | | | | | | ● | |
+| DB · 트랜잭션 <sup>c</sup> | | | | ● | ● | ● | | | | | | | | | |
+| 세션 수명(`acquire`/`release`) <sup>d</sup> | ●<sup>A</sup> | ●<sup>A</sup> | ●<sup>A</sup> | | | | | ●<sup>DR</sup>✗ | | | | | | | |
+| 틱 · 시뮬레이션 <sup>e</sup> | | ● | | ● | | | | | | | | | | | |
+| S2S 커넥터 · `s2s_link` · `s2s_packet` <sup>f</sup> | | | | | | | | | ●<sup>3</sup> | | | | | | |
+| 세션 서버(`src/session/`) · 수용 경로 <sup>f</sup> | | | | | | | | | ●<sup>3</sup> | ●<sup>RA</sup> | | | | | ● |
+| 예약 게이트 · 신원 확정 <sup>g</sup> | | | | | | ● | | | | ● | ● | | | | ● |
+| 드레인 · 서비스 상태 | | | | | | | | | ● | ● | | ● | | | |
+| idle · 유휴 정리 | | | | | | | | ●<sup>DR</sup> | | | | | ● | | ● |
+| 동기 Kick <sup>h</sup> | | | | | | ● | | | ●<sup>A</sup> | ●<sup>A</sup> | ● | | | | |
+| C++ 클라(`src/client/`) · `client.ps1` <sup>i</sup> | | ◐ | | | | | | | | | | | | | ● |
 
 <sup>a</sup> **락(L1 명부·L2 세션)·`EntryTable`(존 인덱스·`move_zone`)·직렬 큐(`serial_queue`)** — 옛 「존·존 스레드·placement」 행을 대체한다(`placement.h`·`zone_manager.{h,cpp}` 는 삭제됐다). **◐ 조건**: 명부 갱신 API(`enter`/`leave`/`move_zone`)나 직렬 큐 push/drain 경로를 건드렸으면 5·6·8 도 포함한다. 7 은 락 계층 검사기라 **Debug/ASan 이어야 뜻이 있다**.
 <sup>b</sup> `handle_chat`·`build_frame`·`snapshot_zone`/`snapshot_all`·`find_acquire_by_player_id`(신설). **⛔ 위 <sup>a</sup> 행의 필수 세트를 그대로 물려받는다** — 채팅이 명부 스냅샷·통짜 프레임 조립을 그대로 타기 때문이다.
@@ -273,6 +284,7 @@ ASan 은 `free` 한 메모리를 격리에 붙들어 둬서 **누수가 없어�
 <sup>f</sup> `main.cpp`/`config` 배선(S2S)이나 `proto` 공유 헤더(세션 서버)까지 건드렸으면 **전 세트**를 돌린다.
 <sup>g</sup> `handle_enter`·`EntryTable`·`on_frame` 진입부. ⛔ **게이트는 `gate.ps1` 말고는 아무도 안 본다** — 뮤턴트 실측: 게이트를 무력화해도 죽는 것은 `gate.ps1` **N1~N4a 4건뿐**이고 `session.ps1` 73 항목은 **전부 통과했다**(그 73 개 중 미인증 상태로 게임 요청을 보내는 것이 0개다 — 그 시점 총량. 뒤에 78 로 늘었지만 이 결론을 재실측하지는 않았다).
 <sup>h</sup> `find_connection`·`PendingKick`·`find_session`·`close_by_id`·Kick 코덱·`with_snapshot`. 10 은 **K 계열이 주 검증**, 9 는 코덱·NotFound·malformed, 6 은 거래 중 Kick 정리, 11 은 마을 중복 거절 잔존 분기다. ⛔ **세션 수명(`close_by_id`)을 건드리므로 session·s2s ASan 회차 의무.**
+<sup>i</sup> 클라만 바뀌고 서버 소스가 0줄이면 15 하나로 충분하다(S1b 가 `send.ps1` 동치를 하네스 안에서 함께 돌린다). **◐ 2 는 `.sln`·`.vcxproj` 가 바뀌어 서버 exe 가 재빌드됐을 때** — 자체 스폰 대표 1종으로 기동·회귀 무이상을 본다(T015 8단계 절차). 클라 소스는 `proto/packet.h` 만 include 하므로 와이어 규약(`packet.h`)이 바뀌면 15 는 **프로토콜 행**에서 ● 로 걸린다.
 
 > ⚠️ 이 표의 번호는 §2 표 기준이다. **3번(members)을 삽입했을 때 이 표의 번호가 갱신되지
 > 않은 채 남아 있었다**(뒤에 발견·정정) — 그래서 이름을 병기한다. 행을 넣고 빼면 이 표도 같이 본다.
@@ -346,7 +358,17 @@ Git Bash 의 텍스트 모드 변환이 결과를 오염시킨다. **python `b.c
 | ⭐ **신설 — 빈 body 방어**(`body_len < 1`, whisper 이전 공통 검증) | ⛔ **생존은 「1회 관측」일 뿐 결함 부재의 증거가 아니다** — `chat.ps1` 이 관측한 것은 스테일 바이트가 우연히 `type=0`(Zone)으로 읽혀 존 미가입 「조용히 버림」 갈래로 흡수된 경로 하나뿐이다. 그 바이트가 `type=1`(All)로 읽혔다면 `text_len = body_len - 1` 이 음수가 돼 `build_frame` 의 합산·복사가 어긋나는 힙 오버런 경로였다 — **11단계 A 반영(합산·복사 조건 통일)으로 지금은 그 경로 자체가 원천 차단됐다**(그 반영이 없었다면 이 방어의 진짜 값어치는 type=0 흡수가 아니라 이 오버런 차단이었다) | 뮤턴트 실측(R4 — 방어를 `false` 로 무력화) — `chat.ps1` C7(빈 body 절단 기대)이 생존했다(관측된 것은 type=0 갈래 1회뿐). 부수 관측: 생존한 클라가 이후 C9 격리 목록 밖에 남아 `send_full_kicked` 수치가 1 늘었다(같은 회차 실측) |
 | ⭐ **신설 — `SendBuffer::overflow_streak` 리셋**(성공 큐잉 갈래) | ⛔ **창을 못 만든다** — 정상 트래픽은 streak 가 0 을 넘을 일이 없고, 한 번 넘치기 시작한 세션(victim)은 임계까지 연속으로만 넘치다 끊겨서 「넘친 뒤 다시 성공해 리셋이 실제로 도는」 왕복 자체가 이 하네스 시나리오에 없다 | 뮤턴트 실측(R5 — 리셋 문장 제거) — `chat.ps1` 48/48 전건 생존. 유지 근거는 "연속" 계약이라는 코드 정독뿐이다 |
 | ⭐ **신설 — overflow 킥의 `==` 이중-가산 방어**(`streak == send_overflow_limit_`, `>=` 아님) | ⛔ **동치가 아니라 미검증이다** — `chat.ps1` 은 단일 blaster 구조라 `closing=true` 가 임계 도달 즉시 후속 `send_chunks` 재진입을 막아 `==`↔`>=` 차이가 관측되지 않는다(8단계에서 이 뮤턴트를 동치로 보고 미주입한 근거이기도 하다). 그런데 이 방어가 실제로 막는 것은 **다중 송신자가 같은 세션에 동시에 큐를 밀어 넣는 경합**이고, 그 경합을 만드는 하네스가 없다 — "동치라 안전하다"와 "구분할 시나리오가 없어 모른다"는 다른 결론이다 | `chat.ps1` C9 는 blaster 1명뿐이라 이 축을 만들지 않는다 — 다중 송신자 경합 하네스가 생기기 전까지는 코드 정독(§17-6 주석)이 유일한 근거다 |
-| ⭐ **신설 — `try_acquire` open 실패 롤백의 `--acquired_` 보정** | ⛔ **미배선이다** — 값을 거꾸로 넣거나 빼도 빌드·회귀 14종이 전건 통과한다. `[POOL2] acquired=` 를 판정에 쓰는 코드가 저장소에 0건이기 때문이다(`grep -rn "acquired" scripts/` → `dbload.ps1:9` 주석뿐). 앞의 세 사유와 달리 **재현 자체는 쉽다** — DB `open` 을 실패시키면 그 자리서 확실히 갈리는 값인데, 그 값을 읽는 assert 가 하네스에 없을 뿐이다 | 검증하려면 스크래치 config 의 `[db] host`/`port` 를 무효값으로 주어 `open` 실패를 유도하고(자체 스폰 12종과 같은 패턴 — MySQL 서비스 제어는 불필요하다), 종료 로그의 `acquired`/`open_failed` 항등식을 assert 하면 된다. 지금 만들지 않은 이유는 §18-7 — `acquired` 는 풀 크기 판단의 정본이 아니고(`server.ini` 주석이 그 답을 `try_failed` 로 지목한다) `try_failed` 는 이미 `zone_block.ps1` 이 검증한다. 비용은 `mysql_real_connect` 3초 대기 × N회의 실행 시간 증가다 |
+| ⭐ **신설 — `try_acquire` open 실패 롤백의 `--acquired_` 보정** | ⛔ **미배선이다** — 값을 거꾸로 넣거나 빼도 빌드·회귀 14종(당시 — 뒤에 늘어난 `client.ps1` 도 `acquired` 를 읽지 않는다)이 전건 통과한다. `[POOL2] acquired=` 를 판정에 쓰는 코드가 저장소에 0건이기 때문이다(`grep -rn "acquired" scripts/` → `dbload.ps1:9` 주석뿐). 앞의 세 사유와 달리 **재현 자체는 쉽다** — DB `open` 을 실패시키면 그 자리서 확실히 갈리는 값인데, 그 값을 읽는 assert 가 하네스에 없을 뿐이다 | 검증하려면 스크래치 config 의 `[db] host`/`port` 를 무효값으로 주어 `open` 실패를 유도하고(자체 스폰 갈래와 같은 패턴 — MySQL 서비스 제어는 불필요하다), 종료 로그의 `acquired`/`open_failed` 항등식을 assert 하면 된다. 지금 만들지 않은 이유는 §18-7 — `acquired` 는 풀 크기 판단의 정본이 아니고(`server.ini` 주석이 그 답을 `try_failed` 로 지목한다) `try_failed` 는 이미 `zone_block.ps1` 이 검증한다. 비용은 `mysql_real_connect` 3초 대기 × N회의 실행 시간 증가다 |
+| ⭐ **신설(T015) — 클라 `send` 의 「송신 도중 실패」 분기**(`FAIL send` — `send_all` 이 `WSAECONNRESET`/`WSAECONNABORTED` 외 오류로 실패) | ⛔ **창을 못 만든다** — loopback 에서 `send()` 가 실패하려면 상대가 그 순간 끊어야 하는데, 그 조합은 `--expect-close` 판정 직행(C5 해법 a)으로 흡수되고 나머지 오류 코드는 재현 수단이 없다 | 8단계 뮤턴트 17종(주입분) 어느 것도 이 분기를 타지 않았다 — 유지 근거는 코드 정독(`cmd_send.cpp` `last_send_error`) |
+| ⭐ **신설(T015) — 클라 `send` 경로의 `protocol_error`**(응답 헤더 `body_size > 4096`) | ⛔ **전제가 없다** — 서버가 4096 을 넘는 응답을 내지 않으므로(불변식 6) 실서버 앞에서는 영구히 안 밟힌다. 대신 `client selftest` 의 `parse_frames_oversized` 항목이 같은 함수를 직접 검증한다(S0) | MUT2(`parse_frames` 마지막 프레임 누락)가 S0·S1·S4a 를 죽인 것으로 파서 판정력은 실증됐다 — 다만 그 항목은 오버사이즈 분기가 아니라 정상 분할을 죽인 것이다 |
+| ⭐ **신설(T015) — 클라 `recv_exact` 의 「부분 수신 반복 시 마감 갱신」 결함** | ⛔ **창을 못 만든다** — S3f(`timeout at enter`) 는 세션 서버가 `kEnterReq` 를 조용히 버려 **완전 침묵**이라 루프가 1회로 끝난다(S3f 경과 1518ms ≤ 3000ms 단언은 「누적 마감이 배수로 늘지 않는다」의 1회 케이스만 본다). 부분 수신을 강제하려면 헤더만 보내고 멈추는 서버가 필요하다 | 유지 근거는 코드 정독(`tcp_client.cpp` `recv_exact` 의 마감 계산) |
+| ⭐ **신설(T015) — 클라 `flow` 의 「단계 통째 생략」 뮤턴트**(예: Echo 단계를 건너뛰고 Ping 으로) | ⛔ **도구가 못 본다** — 판정 술어(`expect_frame`·`bytes_equal`)를 우회하는 형태라 selftest(술어 자체를 검증)도 하네스(출력 줄 대조)도 잡지 못한다 — 생략된 단계의 줄이 안 찍히는 것을 S2 의 「줄마다 1건」이 잡는 범위까지만 | S2-login/enter/echo/pong 4건은 정상 경로 판정이라 8단계 뮤턴트 대상이 아니었다(의도된 생존) — 단계 생략은 코드 리뷰 축 |
+| ⭐ **신설(T015) — 클라 `flow` 의 login 단계 타임아웃 · 암묵 `login result≠0` FAIL 분기** | ⛔ **창을 못 만든다** — 두 서버가 로그인 요청에 즉시 응답하거나(세션) 즉시 끊는다(마을 게이트). `result≠0`(예: `NoServer`)은 마을이 등록되기 전에만 나는데 하네스는 등록 뒤에 시나리오를 시작한다 | S3a(끊김)·S14(`--expect-login-result` 불일치)만 실행된다 — 타임아웃·암묵 nonzero 갈래는 코드 정독 |
+| ⭐ **신설(T015) — 클라 `WSACleanup` 정확히 1회** | ⛔ **기계 게이트가 없다** — `WinsockScope` RAII(`tcp_client.h`) 하나가 `main` 에서만 생성되는 구조지만 그것을 세는 하네스·검사기가 없다 | 7단계 코드 정독(`main.cpp` · `tcp_client.h` · `tcp_client.cpp` 의 `WSAStartup`/`WSACleanup` 짝)으로 확인 — 회귀는 없다 |
+| ⭐ **신설(T015) — raw `--repeat>1` 의 「송신 도중 절단」 분기**(`peer closed during send`) | ⛔ **결정적 재현 불가** — 서버가 첫 4B 를 헤더로 읽어 끊는 시점과 클라의 2·3번째 `send_all` 이 loopback 에서 경합한다. S8(`--repeat 3 --size 4 --expect-close`) 20회 연속 실측은 **전부 수신 단계 절단**이었고, 8단계 MUT18 회차(recv 의 `kClosed` 분기 무력화)에서 **처음으로 송신 단계 절단(`WSAGetLastError=10053`)이 1회 관측**돼 두 경로가 모두 실재함은 확인됐다 — 어느 쪽을 타는지는 여전히 비결정적이라 S8 은 두 경로 중 하나만 죽인 뮤턴트에 생존할 수 있다(MUT18 에서 S3e 는 죽고 S8 은 생존) | 분기 자체는 C5(7단계 correctness HIGH — `send_all` 이 `last_send_error` 를 남기고 `expect_close` 면 `closed_seen` 으로 판정 직행)로 존재하고 코드 정독 + 위 1회 관측으로 확인 |
+| ⭐ **신설(T015) — `client.ps1` 자체의 종료 코드 규약**(「실패 건수 = exit」) | ⚠️ **한 번 깨졌었다** — PowerShell 5.1 은 `Where-Object` 결과가 정확히 1개면 배열이 아닌 객체 하나를 돌려주고 `[pscustomobject]` 의 `.Count` 는 `$null` 이라, **실패가 정확히 1건일 때만** `exit $null`=0 이 됐다(콘솔 요약은 정확). 8단계 MUT1 회차(S0 1건 실패 · exit 0)가 드러냈고 `@(…).Count` 로 고쳤다 — 이후 1건 실패 회차 8종(MUT4·6·7·8·9·10·11·12)이 전부 exit 1 | 하네스 자체를 검증하는 하네스는 없다 — 같은 형태가 `inventory.ps1:248,266,267` 에도 있으나 그쪽은 정수 스칼라라 `.Count` 가 1 을 돌려줘 결함이 아니다(기록만) |
+| ⭐ **신설(T015) — 클라 `bytes_equal` 의 `n==0` 분기**(`memcmp` 회피 갈래) | ⛔ **미배선이다** — `selftest` 의 `bytes_equal` 항목은 8B 만 시험하고, `flow` 의 `--echo-size` 는 35판정 전부 기본값 8 이라 그 분기가 한 번도 실행되지 않는다. 재현은 쉽다(`--echo-size 0` 또는 selftest 항목 1개) — 11단계 test 렌즈 LOW | 다음 조각에서 selftest 항목을 추가한다(12 → 13 이면 ADR-029·DESIGN §12·ARCHITECTURE §8·README·이 표 15행의 「12항목」 전파가 따라온다 — 그 비용 때문에 이번 커밋에는 넣지 않았다) |
+| ⭐ **신설(T015) — 클라 `close_rst` 의 RST 의미론**(`SO_LINGER{1,0}` + `closesocket` 이 실제로 RST 를 내는가) | ⛔ **도구가 못 본다** — S9(`--drop-after-send`)는 `drop  : RST 로 즉시 종료` 출력 줄과 exit 0 만 보고, 소켓 레벨(RST vs FIN)은 관측하지 않는다. 뮤턴트 MUT20(`close_rst()` → `close_graceful()` 바꿔치기)이 **35/35 그대로 생존**했다(8단계 실측 — 11단계 test 렌즈 LOW 제안분) | 유지 근거는 코드 정독(`tcp_client.cpp` `close_rst` 의 MS Learn 인용)뿐. 소켓 레벨 관측(서버 쪽 `WSAECONNRESET` 수신 로그 또는 패킷 캡처)이 생기기 전까지 S9 는 「경로 실행 커버리지」다 |
 
 ⚠️ **`P6-6k`(옛 「존 스레드 내부 40 연결 경합」)는 완전히 역사적 기록이 됐다** — 원문은
 「40 연결이 전부 존 스레드 0 으로 FIFO 순차 처리돼 경합이 아니었다」(`iocp_server.cpp:704-705` →

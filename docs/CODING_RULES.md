@@ -58,13 +58,15 @@
 ### 계층과 파일 등록
 
 - 의존 방향은 한쪽이다 — `world → proto → net → core` · `db → core` · `ops → core` ·
-  **`session → proto → net → core`(`db` 는 링크하지 않는다 — ADR-020 결정 7)**.
+  **`session → proto → net → core`(`db` 는 링크하지 않는다 — ADR-020 결정 7)** ·
+  **`client → proto`(헤더 전용 `packet.h` 만 include — `common.lib` 도 링크하지 않는다 · ADR-029 결정 2)**.
   `app` 만 전부를 안다. 역방향 include 금지.
   ⚠️ **`session` 줄이 오래 빠져 있었다** — 세션 서버는 레지스트리·예약·접속 테이블을 전부 프로세스 메모리에 두므로 DB 계층이 아예 안 붙는다는 것이 이 줄의 요지다.
+  ⚠️ `client` 는 서버가 아니라 **검증 도구**다 — 서버와 다른 프로세스로 동시에 돌고 `net`·`core`·`db`·`app` 을 몰라야 한다. `core/log.h` 도 쓰지 않는다(stdout `printf`+`fflush` — 하네스가 줄을 파싱한다).
 - 새 `.cpp`/`.h` 는 **그 파일이 속한 프로젝트에** 손으로 등록한다(와일드카드가 없다) —
   `src/{core,net,db,ops,bench,proto}` → `server\common.vcxproj` ·
   `src/{app,world}` 와 `src/main.cpp` → `server\village.vcxproj` ·
-  `src/session/` → `server\session.vcxproj`. `.filters` 도 같이,
+  `src/session/` → `server\session.vcxproj` · `src/client/` → `server\client.vcxproj`. `.filters` 도 같이,
   ⚠️ **`.sln` 구성 6줄까지** — 빠지면 그 구성이 조용히 빠진다.
   ⛔ **헤더 전용 추가가 가장 위험하다** — `<ClInclude>` 에 안 넣어도 `#include` 로 끌려와
   빌드가 성공하므로 아무 증상이 없다.
